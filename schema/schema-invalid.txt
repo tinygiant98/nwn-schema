@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": 123,
+  "description": "A product from the catalog",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "integer"
+    },
+    "name": {
+      "type": "strng"
+    },
+    "price": {
+      "type": "number",
+      "exclusiveMinimum": "zero"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": 15
+      }
+    },
+    "extra": {
+      "foo": "bar"
+    }
+  },
+  "required": "id",
+  "additionalProperties": "no"
+}

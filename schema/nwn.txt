@@ -1,0 +1,16 @@
+{
+  "$defs": {
+    "simpleTypes": {
+      "enum": [
+        "array",
+        "boolean",
+        "integer",
+        "null",
+        "number",
+        "object",
+        "string",
+        "float"
+      ]
+    }
+  }
+}
