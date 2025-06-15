@@ -1,4 +1,10 @@
 
+int schema_HasKey(json jo, string sKey)
+{
+    // Returns TRUE if the object has the specified key, FALSE otherwise
+    return (JsonFind(jo, JsonString(sKey)) != JsonNull());
+}
+
 /// -----------------------------------------------------------------------------------------------
 ///                                         PATH MANAGEMENT
 /// -----------------------------------------------------------------------------------------------
@@ -1340,12 +1346,121 @@ json schema_validate_Metadata(string sKey, json jValue)
     return schema_output_InsertAnnotation(joOutput, sKey, jValue);
 }
 
-
-
-/// @todo add an "output" node input variable, that starts as JSON_NULL
-/// This is the initial function, not the recursive one.
-json schema_validate_Validate(json jInstance, json jSchema, json joOutput = JSON_NULL)
+int Schema_Validate(json joSchema, json joInstance)
 {
+    json joResult = JSON_NULL;
+
+    json jaKeys = JsonObjectKeys(joSchema);
+    int bHandledConditional = FALSE;
+    int bHandledArray = FALSE;
+    int bHandledObject = FALSE;
+
+    int i; for (; i < JsonGetLength(jaKeys); i++)
+    {
+        string sKey = JsonArrayGet(jaKeys, i);
+        json jValue = JsonObjectGet(joSchema, sKey);
+
+        // Conditional keywords group
+        if (sKey == "if" || sKey == "then" || sKey == "else")
+        {
+            if (!bHandledConditional)
+            {
+                json joIf   = schema_HasKey(joSchema, "if")   ? JsonObjectGet(joSchema, "if")   : JSON_NULL;
+                json joThen = schema_HasKey(joSchema, "then") ? JsonObjectGet(joSchema, "then") : JSON_NULL;
+                json joElse = schema_HasKey(joSchema, "else") ? JsonObjectGet(joSchema, "else") : JSON_NULL;
+
+                joResult = schema_validate_If(joInstance, joIf, joThen, joElse);
+                bHandledConditional = TRUE;
+            }
+            continue;
+        }
+
+        // Array keywords group
+        if (sKey == "prefixItems" || sKey == "items" || sKey == "contains" ||
+            sKey == "minContains" || sKey == "maxContains" || sKey == "unevaluatedItems")
+        {
+            if (!bHandledArray)
+            {
+                joResult = schema_validate_Array()
 
 
+                json joPrefixItems      = JsonObjectGet(joSchema, "prefixItems");
+                json joItems            = JsonObjectGet(joSchema, "items");
+                json joContains         = JsonObjectGet(joSchema, "contains");
+                json joMinContains      = JsonObjectGet(joSchema, "minContains");
+                json joMaxContains      = JsonObjectGet(joSchema, "maxContains");
+                json joUnevaluatedItems = JsonObjectGet(joSchema, "unevaluatedItems");
+
+                joResult = schema_validate_Array(
+                    joPrefixItems, joItems, joContains,
+                    joMinContains, joMaxContains, joUnevaluatedItems,
+                    joInstance, joSchema
+                );
+                bHandledArray = TRUE;
+            }
+            continue;
+        }
+
+        // Object keywords group
+        if (sKey == "properties" || sKey == "patternProperties" ||
+            sKey == "additionalProperties" || sKey == "dependentSchemas" ||
+            sKey == "propertyNames" || sKey == "unevaluatedProperties")
+        {
+            if (!bHandledObject)
+            {
+                json joProperties            = JsonObjectHas(joSchema, "properties")            ? JsonObjectGet(joSchema, "properties")            : JSON_NULL;
+                json joPatternProperties     = JsonObjectHas(joSchema, "patternProperties")     ? JsonObjectGet(joSchema, "patternProperties")     : JSON_NULL;
+                json joAdditionalProperties  = JsonObjectHas(joSchema, "additionalProperties")  ? JsonObjectGet(joSchema, "additionalProperties")  : JSON_NULL;
+                json joDependentSchemas      = JsonObjectHas(joSchema, "dependentSchemas")      ? JsonObjectGet(joSchema, "dependentSchemas")      : JSON_NULL;
+                json joPropertyNames         = JsonObjectHas(joSchema, "propertyNames")         ? JsonObjectGet(joSchema, "propertyNames")         : JSON_NULL;
+                json joUnevaluatedProperties = JsonObjectHas(joSchema, "unevaluatedProperties") ? JsonObjectGet(joSchema, "unevaluatedProperties") : JSON_NULL;
+
+                joResult = schema_validate_Object(
+                    joProperties, joPatternProperties, joAdditionalProperties,
+                    joDependentSchemas, joPropertyNames, joUnevaluatedProperties,
+                    joInstance, joSchema
+                );
+                bHandledObject = TRUE;
+            }
+            continue;
+        }
+
+        // Metadata keywords: always call for each occurrence
+        if (sKey == "title" || sKey == "description" || sKey == "default" ||
+            sKey == "deprecated" || sKey == "readOnly" || sKey == "writeOnly" ||
+            sKey == "examples")
+        {
+            joResult = schema_validate_Metadata(sKey, jValue);
+            continue;
+        }
+
+        // Individual keyword dispatchers
+        if (sKey == "allOf")            { joResult = schema_validate_AllOf(jValue, joInstance, joSchema); continue; }
+        if (sKey == "anyOf")            { joResult = schema_validate_AnyOf(jValue, joInstance, joSchema); continue; }
+        if (sKey == "oneOf")            { joResult = schema_validate_OneOf(jValue, joInstance, joSchema); continue; }
+        if (sKey == "not")              { joResult = schema_validate_Not(jValue, joInstance, joSchema); continue; }
+        if (sKey == "required")         { joResult = schema_validate_Required(jValue, joInstance, joSchema); continue; }
+        if (sKey == "minProperties")    { joResult = schema_validate_MinProperties(jValue, joInstance); continue; }
+        if (sKey == "maxProperties")    { joResult = schema_validate_MaxProperties(jValue, joInstance); continue; }
+        if (sKey == "dependentRequired"){ joResult = schema_validate_DependentRequired(jValue, joInstance, joSchema); continue; }
+        if (sKey == "type")             { joResult = schema_validate_Type(jValue, joInstance); continue; }
+        if (sKey == "enum")             { joResult = schema_validate_Enum(jValue, joInstance); continue; }
+        if (sKey == "const")            { joResult = schema_validate_Const(jValue, joInstance); continue; }
+        if (sKey == "multipleOf")       { joResult = schema_validate_MultipleOf(jValue, joInstance); continue; }
+        if (sKey == "maximum")          { joResult = schema_validate_Maximum(jValue, joInstance); continue; }
+        if (sKey == "exclusiveMaximum") { joResult = schema_validate_ExclusiveMaximum(jValue, joInstance); continue; }
+        if (sKey == "minimum")          { joResult = schema_validate_Minimum(jValue, joInstance); continue; }
+        if (sKey == "exclusiveMinimum") { joResult = schema_validate_ExclusiveMinimum(jValue, joInstance); continue; }
+        if (sKey == "maxLength")        { joResult = schema_validate_MaxLength(jValue, joInstance); continue; }
+        if (sKey == "minLength")        { joResult = schema_validate_MinLength(jValue, joInstance); continue; }
+        if (sKey == "pattern")          { joResult = schema_validate_Pattern(jValue, joInstance); continue; }
+        if (sKey == "maxItems")         { joResult = schema_validate_MaxItems(jValue, joInstance); continue; }
+        if (sKey == "minItems")         { joResult = schema_validate_MinItems(jValue, joInstance); continue; }
+        if (sKey == "uniqueItems")      { joResult = schema_validate_UniqueItems(jValue, joInstance); continue; }
+        if (sKey == "format")           { joResult = schema_validate_Format(jValue, joInstance); continue; }
+
+        // ...handle any additional keywords as needed...
+    }
+
+    return joResult;
 }
