@@ -10,14 +10,27 @@
 #include "util_i_unittest"
 
 //#include "schema_i_core"
+#include "schema_i_core2"
 
+void schema_OnPlayerChat()
+{
+    object oPC = GetPCChatSpeaker();
+
+    if (HasChatOption(oPC, "schema"))
+    {
+        json joOutput = schema_output_GetOutputObject();
+        Debug(JsonDump(joOutput), 4);
+    }
+}
+
+
+/*
 void schema_OnPlayerChat()
 {
     object oPC = GetPCChatSpeaker();
 
 //    schema_Initialize(TRUE);
 
-/*
     //Warning(JsonDump(schema_GetVocabulary(), 4));
 
     Debug("Pulling valid and invalid schema from text files...");
@@ -38,7 +51,6 @@ void schema_OnPlayerChat()
 
     //Notice("INVALID RESULTS:");
     //Notice(JsonDump(jInvalidResults, 4));
-*/
 
 //    json jVocab = schema_GetVocabulary();
 //    Notice(JsonDump(jVocab, 4));
@@ -94,6 +106,7 @@ void schema_OnPlayerChat()
     }
 
 }
+*/
 
 // -----------------------------------------------------------------------------
 //                               Library Dispatch
