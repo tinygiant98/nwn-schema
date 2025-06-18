@@ -16,11 +16,14 @@ void schema_OnPlayerChat()
 {
     object oPC = GetPCChatSpeaker();
 
-    if (HasChatOption(oPC, "schema"))
-    {
-        json joOutput = schema_output_GetOutputObject();
-        Debug(JsonDump(joOutput), 4);
-    }
+    Debug("Let's test type!");
+
+    json jInstance = JsonString("hello");
+    json jSchema = JsonParse("[\"number\",\"string\"]");
+
+    json joResult = schema_validate_Type(jInstance, jSchema);
+    Notice(JsonDump(joResult, 4));
+
 }
 
 
