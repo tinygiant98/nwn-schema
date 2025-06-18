@@ -625,6 +625,10 @@ json schema_validate_MinLength(json jsInstance, json jiMinLength)
         return schema_output_InsertError(joOutput, "instance must be a string");
 
     int nMinLength = JsonGetInt(jiMinLength);
+    Debug("jsInstance = " + JsonDump(jsInstance));
+    Debug("sInstance = " + JsonGetString(jsInstance));
+    Debug("jiMinLength = " + JsonDump(jiMinLength));
+    Debug("nMinLength = " + IntToString(nMinLength));
     if (GetStringLength(JsonGetString(jsInstance)) >= nMinLength)
         return schema_output_InsertAnnotation(joOutput, "minLength", jiMinLength);
     else
