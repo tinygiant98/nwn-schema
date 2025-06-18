@@ -90,7 +90,7 @@ const string SCHEMA_OUTPUT_VERBOSE = "verbose";
 
 int schema_output_GetValid(json joOutput)
 {
-    return (JsonObjectGet(joOutput, "valid") == JSON_TRUE);
+    return (JsonObjectGet(joOutput, "valid") == JsonInt(1));
 }
 
 json schema_output_SetValid(json joOutput, int bValid = TRUE)
@@ -533,18 +533,17 @@ json schema_validate_Type(json jInstance, json jType)
 {
     json joOutput = schema_output_GetMinimalObject();
     int nInstanceType = JsonGetType(jInstance);
-    if (JsonGetType(jType) == JSON_TYPE_STRING)
+    int nTypeType = JsonGetType(jType);
+
+    if (nTypeType == JSON_TYPE_STRING)
     {
         if (JsonGetString(jType) == "number")
         {
-            Debug("    checking for a number...");
-
             if (nInstanceType == JSON_TYPE_INTEGER || nInstanceType == JSON_TYPE_FLOAT)
-                joOutput = schema_output_InsertAnnotation(joOutput, "type", jType);
+                return schema_output_InsertAnnotation(joOutput, "type", jType);
         }
         else
         {
-            Debug("    checking for not-a-number...");
             json jaTypes = JsonParse(r"[
                 ""null"",
                 ""object"",
@@ -554,34 +553,26 @@ json schema_validate_Type(json jInstance, json jType)
                 ""float"",
                 ""boolean""
             ]");
-            Debug("      jaTypes -> " + JsonDump(jaTypes));
             json jiFind = JsonFind(jaTypes, jType);
-            Debug("      jiFind -> " + JsonDump(jiFind));
-            Debug("      jiFind type -> " + schema_debug_JsonToType(jiFind));
-            Debug("      nInstanceType -> " + IntToString(nInstanceType));
             if (JsonGetType(jiFind) != JSON_TYPE_NULL && JsonGetInt(jiFind) == nInstanceType)
-                joOutput = schema_output_InsertAnnotation(joOutput, "type", jType);
+                return schema_output_InsertAnnotation(joOutput, "type", jType);
         }
     }
-    else if (JsonGetType(jType) == JSON_TYPE_ARRAY)
+    else if (nTypeType == JSON_TYPE_ARRAY)
     {
-        Debug("  jType is an array!");
         int i; for (; i < JsonGetLength(jType); i++)
         {
-            Debug("  testing entry " + IntToString(i) + ": " + JsonDump(JsonArrayGet(jType, i)));
-
             json joValidate = schema_validate_Type(jInstance, JsonArrayGet(jType, i));
             if (schema_output_GetValid(joValidate))
-                return joValidate;
+                joOutput = joValidate;
         }
     }
 
-    Debug("  Result checking...");
-
     json jaAnnotations = JsonObjectGet(joOutput, "annotations");
-    Debug("    jaAnnotations -> " + JsonDump(jaAnnotations));
     if (JsonGetType(jaAnnotations) == JSON_TYPE_NULL || JsonGetLength(jaAnnotations) == 0)
         return schema_output_InsertError(joOutput, "instance does not match type");
+    else if (nTypeType == JSON_TYPE_ARRAY && JsonGetLength(jaAnnotations) > 0)
+        return schema_output_InsertAnnotation(schema_output_GetMinimalObject(), "type", jType);
 
     return joOutput;
 }
