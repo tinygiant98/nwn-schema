@@ -14,8 +14,27 @@
 
 void schema_OnPlayerChat()
 {
-    ExecuteScript("schema_t_core");
+    //ExecuteScript("schema_t_core");
 
+    json jSchema = JsonParse(r"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""name"": { ""type"": ""string"" },
+            ""age"": { ""type"": ""integer"", ""minimum"": 0 },
+            ""email"": { ""type"": ""string"" }
+        },
+        ""required"": [""name"", ""age"", ""email""],
+        ""additionalProperties"": false
+    }");
+
+    json jInstance = JsonParse(r"{
+        ""name"": ""Alice"",
+        ""age"": 30,
+        ""email"": ""alice@example.com""
+    }");
+
+    json joResult = schema_core_Validate(jInstance, jSchema);
+    Debug("Validation Result: " + JsonDump(joResult, 4));
 
 
 
