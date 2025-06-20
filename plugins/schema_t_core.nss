@@ -718,7 +718,110 @@ void schema_test_validate_Array()
 }
 
 void schema_test_validate_Object()
-{}
+{
+    int t1, t2, t3, t4, tGroup;
+    int b1, b2, b3, b4, bGroup;
+    json r1, r2, r3, r4;
+    json e1, e2, e3, e4;
+
+    json jResultBase = schema_output_GetMinimalObject();
+    json jaRequired = JsonParse(r"[
+        ""item1"",
+        ""item2"",
+        ""item4""
+    ]");
+    json joHasAll = JsonParse(r"{
+        ""item1"": 5,
+        ""item2"": 7,
+        ""item3"": false,
+        ""item4"": null
+    }");
+    json joHasSome = JsonParse(r"{
+        ""item1"": 5,
+        ""item2"": 7
+    }");
+
+    /// @brief This group tests the output of `schema_validate_Required` against expected
+    ///     output for a successful validation.
+    e1 = schema_output_InsertAnnotation(jResultBase, "required", jaRequired);
+    e2 = schema_output_InsertError(jResultBase, schema_output_GetErrorMessage("<validate_required>"));
+
+    tGroup = Timer();
+    {
+        t1 = Timer(); r1 = schema_validate_Required(joHasAll, jaRequired); t1 = Timer(t1);
+        t2 = Timer(); r2 = schema_validate_Required(joHasSome, jaRequired); t2 = Timer(t2);
+    }
+    tGroup = Timer(tGroup);
+
+    bGroup = (b1 = r1 == e1) &
+             (b2 = r2 == e2);
+
+    if (!AssertGroup("[required]", bGroup))
+    {
+        if (!Assert("Instance Meets Constraint", b1))
+            DescribeTestParameters(JsonDump(joHasAll), JsonDump(e1), JsonDump(r1));
+        DescribeTestTime(t1);
+
+        if (!Assert("Instance Does Not Meet Constraint", b2))
+            DescribeTestParameters(JsonDump(joHasSome), JsonDump(e2), JsonDump(r2));
+        DescribeTestTime(t2);
+    } DescribeGroupTime(tGroup); Outdent();
+
+    /// @brief This group tests the output of `schema_validate_MinProperties` against expected
+    ///     output for a successful validation.
+    e1 = schema_output_InsertAnnotation(jResultBase, "minProperties", JsonInt(3));
+    e2 = schema_output_InsertError(jResultBase, schema_output_GetErrorMessage("<validate_minproperties>"));
+
+    tGroup = Timer();
+    {
+        t1 = Timer(); r1 = schema_validate_MinProperties(joHasAll, JsonInt(3)); t1 = Timer(t1);
+        t2 = Timer(); r2 = schema_validate_MinProperties(joHasSome, JsonInt(3)); t2 = Timer(t2);
+    }
+    tGroup = Timer(tGroup);
+
+    bGroup = (b1 = r1 == e1) &
+             (b2 = r2 == e2);
+
+    if (!AssertGroup("[minProperties]", bGroup))
+    {
+        if (!Assert("Instance Meets Constraint", b1))
+            DescribeTestParameters(JsonDump(joHasAll), JsonDump(e1), JsonDump(r1));
+        DescribeTestTime(t1);
+
+        if (!Assert("Instance Does Not Meet Constraint", b2))
+            DescribeTestParameters(JsonDump(joHasSome), JsonDump(e2), JsonDump(r2));
+        DescribeTestTime(t2);
+    } DescribeGroupTime(tGroup); Outdent();
+
+    /// @brief This group tests the output of `schema_validate_MaxProperties` against expected
+    ///     output for a successful validation.
+    e1 = schema_output_InsertAnnotation(jResultBase, "maxProperties", JsonInt(3));
+    e2 = schema_output_InsertError(jResultBase, schema_output_GetErrorMessage("<validate_maxproperties>"));
+
+    tGroup = Timer();
+    {
+        t1 = Timer(); r1 = schema_validate_MaxProperties(joHasSome, JsonInt(3)); t1 = Timer(t1);
+        t2 = Timer(); r2 = schema_validate_MaxProperties(joHasAll, JsonInt(3)); t2 = Timer(t2);
+    }
+    tGroup = Timer(tGroup);
+
+    bGroup = (b1 = r1 == e1) &
+             (b2 = r2 == e2);
+
+    if (!AssertGroup("[maxProperties]", bGroup))
+    {
+        if (!Assert("Instance Meets Constraint", b1))
+            DescribeTestParameters(JsonDump(joHasSome), JsonDump(e1), JsonDump(r1));
+        DescribeTestTime(t1);
+
+        if (!Assert("Instance Does Not Meet Constraint", b2))
+            DescribeTestParameters(JsonDump(joHasAll), JsonDump(e2), JsonDump(r2));
+        DescribeTestTime(t2);
+    } DescribeGroupTime(tGroup); Outdent();
+
+    /// @todo schema_validate_DependentRequired()
+    /// @todo schema_validate_Object()
+}
 
 void schema_test_validate_Applicator()
 {}
