@@ -1,0 +1,34 @@
+# $ref Value Cases Checklist
+
+A handy checklist for all possible $ref value formats, reordered for efficient implementation:
+
+- [x] **Case 8: Empty reference**
+  - Example: `` (empty string)
+
+- [x] **Case 1: Fragment-only reference**
+  - Example: `#`, `#/definitions/Node`, `#anchor`
+
+- [ ] **Case 3: Absolute URI (Non-Hierarchical)**
+  - Example: `urn:uuid:123e4567-e89b-12d3-a456-426614174000`, `mailto:foo@example.com`, `data:,foo`
+
+- [ ] **Case 10: Other URI schemes**
+  - Example: `ftp://example.com/schema.json`, `data:text/plain,foo`
+
+- [ ] **Case 2: Absolute URI (Hierarchical)**
+  - Example: `https://example.com/schemas/node.json`, `http://example.com/schemas/node.json#/defs/foo`
+
+- [ ] **Case 7: Network-path reference**
+  - Example: `//example.com/schemas/node.json`
+
+- [ ] **Case 4: Document-relative reference**
+  - Root-relative: `/schemas/node.json`
+  - Relative to current: `defs/node.json`
+
+- [ ] **Case 5: Dot segments (Relative Path)**
+  - Example: `./defs/node.json`, `../common/node.json`
+
+- [ ] **Case 6: Combined path and fragment**
+  - Example: `../common/node.json#/defs/foo`, `./defs/node.json#/foo/bar`
+
+- [ ] **Case 9: Query-only reference** *(optional or moot)*
+  - Example: `?v=2`

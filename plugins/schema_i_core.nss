@@ -87,8 +87,55 @@ json schema_path_Get()
     return jaPath;
 }
 
-string schema_path_Build()
+json schema_path_Deconstruct(string sPath)
 {
+    string s = r"
+        WITH RECURSIVE split_string(input_string, part, rest) AS (
+            SELECT 
+                TRIM(:path, '/'), 
+                CASE 
+                    WHEN INSTR(TRIM(:path, '/'), '/') = 0 
+                        THEN TRIM(:path, '/')
+                    ELSE SUBSTR(TRIM(:path, '/'), 1, INSTR(TRIM(:path, '/'), '/') - 1)
+                END,
+                CASE 
+                    WHEN INSTR(TRIM(:path, '/'), '/') = 0 
+                        THEN ''
+                    ELSE SUBSTR(TRIM(:path, '/'), INSTR(TRIM(:path, '/'), '/') + 1)
+                END
+            
+            UNION ALL
+            
+            SELECT 
+                rest,
+                CASE 
+                    WHEN INSTR(rest, '/') = 0 
+                        THEN rest
+                    ELSE SUBSTR(rest, 1, INSTR(rest, '/') - 1)
+                END,
+                CASE 
+                    WHEN INSTR(rest, '/') = 0 
+                        THEN ''
+                    ELSE SUBSTR(rest, INSTR(rest, '/') + 1)
+                END
+            FROM split_string
+            WHERE rest != ''
+        )
+        SELECT json_group_array(part) AS path_array
+        FROM split_string
+        WHERE part != '';
+    ";
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindString(q, ":path", sPath);
+
+    return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
+}
+
+string schema_path_Construct(json jPath = JSON_NULL)
+{
+    if (JsonGetType(jPath) == JSON_TYPE_NULL)
+        jPath = schema_path_Get();
+
     string s = r"
         WITH path_elements AS (
             SELECT value
@@ -102,7 +149,7 @@ string schema_path_Build()
         FROM path_elements;
     ";
     sqlquery q = schema_core_PrepareQuery(s);
-    SqlBindJson(q, ":schema_path", schema_path_Get());
+    SqlBindJson(q, ":schema_path", jPath);
 
     return SqlStep(q) ? SqlGetString(q, 0) : "";
 }
@@ -447,7 +494,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
 
 json schema_output_SetKeywordLocation(json jOutput)
 {
-    return JsonObjectSet(jOutput, "keywordLocation", JsonString(schema_path_Build()));
+    return JsonObjectSet(jOutput, "keywordLocation", JsonString(schema_path_Construct()));
 }
 
 json schema_output_GetOutputUnit()
@@ -745,9 +792,36 @@ json schema_reference_ResolveRef(json joSchema, json jRef)
             if (GetStringLeft(sFragment, 1) == "/")
                 return schema_reference_ResolveRefPointer(joSchema, sFragment);
             else
-                return schema_reference_ResolveRefAnchor(joSchema, sFragment);
+            {
+                json joAnchor = schema_reference_ResolveRefAnchor(joSchema, sFragment);
+                if (JsonGetType(joAnchor) == JSON_TYPE_NULL)
+                    joAnchor = JsonObjectGet(joSchema, sFragment);
+
+                return joAnchor;
+            }
         }
         
+        /// @brief Handle non-hierchical references. These cannot be resolved and
+        ///     should be treated as a filename (?) @todo
+        if (sScheme != "" && sAuthority == "")
+        {
+            string sResource = JsonGetString(JsonArrayGet(jaMatch, 1)) +
+                               JsonGetString(JsonArrayGet(jaMatch, 3)) +
+                               JsonGetString(JsonArrayGet(jaMatch, 5));
+
+            joTargetSchema = schema_reference_GetSchema(sResource);
+            if (JsonGetType(joTargetSchema) == JSON_TYPE_NULL)
+                joTargetSchema = schema_reference_ResolveRefFile(sResource);
+
+            if (JsonGetType(joTargetSchema) != JSON_TYPE_NULL)
+            {
+                if (sFragment != "")
+                {
+/// @todo here.
+                }
+            }
+        }
+
         /// @brief Special case to handle recursive call to current schema
         if (sPath != "" && sPath == JsonGetString(JsonObjectGet(joSchema, "id")))
         {
