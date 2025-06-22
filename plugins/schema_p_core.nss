@@ -16,27 +16,66 @@ void schema_OnPlayerChat()
 {
     //ExecuteScript("schema_t_core");
 
-    json jSchema = JsonParse(r"{
-        ""type"": ""object"",
-        ""properties"": {
-            ""name"": { ""type"": ""string"" },
-            ""age"": { ""type"": ""integer"", ""minimum"": 0 },
-            ""email"": { ""type"": ""string"" }
-        },
-        ""required"": [""name"", ""age"", ""email""],
-        ""additionalProperties"": false
-    }");
+//    json jSchema = JsonParse(r"{
+//        ""type"": ""object"",
+//        ""properties"": {
+//            ""name"": { ""type"": ""string"" },
+//            ""age"": { ""type"": ""integer"", ""minimum"": 0 },
+//            ""email"": { ""type"": ""string"" }
+//        },
+//        ""required"": [""name"", ""age"", ""email""],
+//        ""additionalProperties"": false
+//    }");
+//
+//    json jInstance = JsonParse(r"{
+//        ""name"": ""Alice"",
+//        ""age"": 30,
+//        ""email"": ""alice@example.com""
+//    }");
+//
+//    json joResult = schema_core_Validate(jInstance, jSchema);
+//    Debug("Validation Result: " + JsonDump(joResult, 4));
 
-    json jInstance = JsonParse(r"{
-        ""name"": ""Alice"",
-        ""age"": 30,
-        ""email"": ""alice@example.com""
-    }");
+int TEST = 2;
 
-    json joResult = schema_core_Validate(jInstance, jSchema);
-    Debug("Validation Result: " + JsonDump(joResult, 4));
+    if (TEST == 0)
+    {
+        json jSchema = JsonParse(r"[
+            ""object"",
+            ""array"",
+            ""string"",
+            ""number"",
+            ""integer"",
+            ""boolean"",
+            ""null""
+        ]");
 
+        json jInstance = JsonString("test_string");
+        json joResult = schema_validate_Type(jInstance, jSchema);
 
+        Debug("Type Validation Result: " + JsonDump(joResult, 4));
+    }
+    else if (TEST == 1)
+    {
+        string r = "^([^#]*)(?:#(.*))?$";
+        string s = "#fragment";
+        string t = "uri#fragment";
+
+        json jMatch = RegExpMatch(r, s);
+        Debug("Match s = " + JsonDump(jMatch));
+        jMatch = RegExpMatch(r, t);
+        Debug("Match t = " + JsonDump(jMatch));
+    }
+    else if (TEST == 2)
+    {
+        json a = JsonParse("[0, 1]");
+        json b = JsonArrayGetRange(a, 0, -2);
+        Debug("Cut Down Array: " + JsonDump(b));
+
+        json c = JsonParse("[0]");
+        json d = JsonArrayGetRange(c, 0, -2);
+        Debug("Cut Down Single Element Array: " + JsonDump(d));
+    }
 
 
 

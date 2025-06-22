@@ -23,10 +23,18 @@ string schema_debug_JsonToType(json j)
 
 json schema_core_Validate(json jInstance, json joSchema);
 
+/// @todo get rid of this one?
 int schema_HasKey(json jo, string sKey)
 {
     // Returns TRUE if the object has the specified key, FALSE otherwise
     return (JsonFind(jo, JsonString(sKey)) != JsonNull());
+}
+
+/// @todo reorder all the functions.  We're almost there!
+
+sqlquery schema_core_PrepareQuery(string s)
+{
+    return SqlPrepareQueryCampaign("schema_data", s);
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -36,17 +44,50 @@ int schema_HasKey(json jo, string sKey)
 ///    the current path in a schema.  This data will primarily be used for providing
 ///    path information for error and annotation messages.
 
-/// @brief Retrieve the schema path array.
+void schema_path_Destroy()
+{
+    DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH"));
+    DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS"));
+}
+
+int schema_path_GetDepth(int bDepthOnly = FALSE)
+{
+    int nDepth = GetLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH");
+    nDepth = nDepth == 0 ? 1 : nDepth;
+
+    if (!bDepthOnly)
+    {
+        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+        if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
+            jaPaths = JsonArray();
+        
+        if (JsonGetLength(jaPaths) <= nDepth)
+        {
+            while (JsonGetLength(jaPaths) <= nDepth)
+                jaPaths = JsonArrayInsert(jaPaths, JsonArray());
+
+            SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", jaPaths);        
+        }
+    }
+
+    return nDepth;
+}
+
 json schema_path_Get()
 {
-    json jaPath = GetLocalJson(GetModule(), "SCHEMA_PATH");
+    int nDepth = schema_path_GetDepth();
+    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+    if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY || JsonGetLength(jaPaths) <= nDepth)
+        return JsonArray();
+    
+    json jaPath = JsonArrayGet(jaPaths, nDepth);
     if (JsonGetType(jaPath) != JSON_TYPE_ARRAY)
         return JsonArray();
-
+    
     return jaPath;
 }
 
-string schema_path_BuildPath()
+string schema_path_Build()
 {
     string s = r"
         WITH path_elements AS (
@@ -69,30 +110,63 @@ string schema_path_BuildPath()
 /// @brief Push a path into the schema path array.
 /// @param jsPath JSON string containing the path.
 /// @returns The updated path array.
-json schema_path_Push(json jsPath)
+void schema_path_Push(string sFragment)
 {
-    if (JsonGetType(jsPath) == JSON_TYPE_STRING)
-    {
-        json jaPath = JsonArrayInsert(schema_path_Get(), jsPath);
-        SetLocalJson(GetModule(), "SCHEMA_PATH", jaPath);
-        return jaPath;
-    }
-
-    return schema_path_Get();
+    int nDepth = schema_path_GetDepth();
+    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+    
+    if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
+        jaPaths = JsonArray();
+    
+    while (JsonGetLength(jaPaths) <= nDepth)
+        jaPaths = JsonArrayInsert(jaPaths, JsonArray());
+    
+    json jaPath = JsonArrayGet(jaPaths, nDepth);
+    
+    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY)
+        jaPath = JsonArray();
+    
+    jaPath = JsonArrayInsert(jaPath, JsonString(sFragment));
+    jaPaths = JsonArraySet(jaPaths, nDepth, jaPath);
+    SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", jaPaths);
 }
 
 /// @brief Pop the last path from the path array.
 /// @returns The last path in the array, or an empty JSON string.
-json schema_path_Pop()
+void schema_path_Pop()
 {
-    json jaPath = schema_path_Get();
-    if (JsonGetLength(jaPath) > 0)
-    {
-        SetLocalJson(GetModule(), "SCHEMA_PATH", JsonArrayGetRange(jaPath, 0, JsonGetLength(jaPath) - 1));
-        return JsonArrayGet(jaPath, JsonGetLength(jaPath) - 1);
-    }
+    int nDepth = schema_path_GetDepth();
+    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+    
+    if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY || JsonGetLength(jaPaths) <= nDepth)
+        return;
+    
+    json jaPath = JsonArrayGet(jaPaths, nDepth);
+    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY || JsonGetLength(jaPath) == 0)
+        return;
+    
+    jaPaths = JsonArraySet(jaPaths, nDepth, (JsonGetLength(jaPath) == 1) ? JsonArray() : JsonArrayGetRange(jaPath, 0, -2));
+    SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", jaPaths);
+}
 
-    return JsonString("");
+void schema_path_IncrementDepth()
+{
+    int nDepth = schema_path_GetDepth(TRUE);
+    SetLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH", ++nDepth);
+    schema_path_GetDepth();
+}
+
+void schema_path_DecrementDepth()
+{
+    int nDepth = schema_path_GetDepth(TRUE);
+    if (nDepth > 1)
+    {
+        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+        if (JsonGetType(jaPaths) == JSON_TYPE_ARRAY && JsonGetLength(jaPaths) > nDepth)
+            SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", JsonArrayGetRange(jaPaths, 0, nDepth));
+        
+        SetLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH", --nDepth);
+    }
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -205,15 +279,6 @@ json schema_output_SetValid(json joOutputUnit, int bValid = TRUE)
 {
     return JsonObjectSet(joOutputUnit, "valid", bValid ? JSON_TRUE : JSON_FALSE);
 }
-
-sqlquery schema_core_PrepareQuery(string s)
-{
-    return SqlPrepareQueryCampaign("schema_data", s);
-}
-
-/// @todo build schema_core_Reset()
-/// @todo create a "core" section for the core functions
-/// @todo check for existence of sFile and use backup json
 
 /// @private Build a minimally acceptable output object for the desired verbosity level.  This
 ///     output object will not include any optional fields.  It relies on the json-schema.org
@@ -380,6 +445,11 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
     return JsonObject();
 }
 
+json schema_output_SetKeywordLocation(json jOutput)
+{
+    return JsonObjectSet(jOutput, "keywordLocation", JsonString(schema_path_Build()));
+}
+
 json schema_output_GetOutputUnit()
 {
     return schema_output_SetKeywordLocation(schema_output_GetMinimalObject());
@@ -421,12 +491,6 @@ json schema_output_InsertAnnotation(json joOutputUnit, string sKey, json jValue)
 
     json joAnnotation = JsonObjectSet(schema_output_GetOutputUnit(), sKey, jValue);
     return JsonObjectSet(joOutputUnit, "annotations", JsonArrayInsert(jaAnnotations, joAnnotation));
-}
-
-
-json schema_output_SetKeywordLocation(json jOutput)
-{
-    return JsonObjectSet(jOutput, "keywordLocation", schema_path_BuildPath());
 }
 
 /// @todo this should be a convenience function to turn schema_output_Flag into an easily
@@ -566,11 +630,26 @@ json schema_output_Detailed(json joOutputUnit)
 /// @brief Schema reference management functions.  These functions provide a method for identifying,
 ///     resolving and utilizing $anchor, $dynamicAnchor, $ref and $dynamicRef keywords.
 
-/// @todo this needs to be ResolveRef and ResolveDynamicRef (?)
-json schema_reference_ResolveRef(json joSchema, json jsRef)
+/// @todo align sqlite variable names across functions
+/// @todo build documentation!
+
+json schema_reference_GetSchema(string sID)
 {
-    /// @todo provide a real feedback message
-    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT || JsonGetType(jsRef) != JSON_TYPE_STRING)
+    string s = r"
+        SELECT schema
+        FROM schema_schema
+        WHERE json_extract(schema, '$.id') = :schema_id;
+    ";
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindString(q, ":schema_id", sID);
+
+    return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+}
+
+/// @todo this needs to be ResolveRef and ResolveDynamicRef (?)
+json schema_reference_ResolveRefAnchor(json joSchema, string sAnchor)
+{
+    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT || sAnchor == "")
         return JsonNull();
 
     string s = r"
@@ -590,14 +669,144 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
 
     sqlquery q = SqlPrepareQueryObject(GetModule(), s);
     SqlBindJson(q, ":schema", joSchema);
-    SqlBindJson(q, ":anchor", jsRef);
+    SqlBindString(q, ":anchor", sAnchor);
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
 }
 
-/// @todo serious work in progress here.
-///  need to know where to start from to make this works, so we'd have to
-///  record pathing as the schema is descended into/out of.
+json schema_reference_ResolveRefPointer(json joSchema, string sPointer)
+{
+    string s = r"
+        WITH
+            schema(data) AS (SELECT :schema),
+            schema_tree AS (SELECT * FROM schema, json_tree(schema.data)),
+            schema_path AS (
+                SELECT 
+                    '$' || replace(
+                        CASE WHEN substr(:pointer, 1, 1) = '/' 
+                            THEN substr(:pointer, 2) 
+                            ELSE :pointer 
+                        END, 
+                        '/', '.'
+                    ) AS path
+            )
+        SELECT value
+        FROM schema_tree 
+        WHERE fullkey = (SELECT path FROM schema_path)
+        LIMIT 1;
+    ";
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindJson(q, ":schema", joSchema);
+    SqlBindString(q, ":pointer", sPointer);
+
+    return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+}
+
+json schema_reference_ResolveRefFile(string sFile)
+{
+    if (ResManGetAliasFor(sFile, RESTYPE_TXT) == "")
+        return JsonNull();
+
+    json joSchema = JsonParse(ResManGetFileContents(sFile, RESTYPE_TXT));
+    if (JsonGetType(joSchema) == JSON_TYPE_NULL)
+        return JsonNull();
+
+    schema_path_IncrementDepth();
+    json joResult = schema_core_Validate(joSchema, JsonNull());
+    /// @todo need metaschema getter here           ^^^^^^^^^^
+    schema_path_DecrementDepth();
+
+    if (!schema_output_GetValid(joResult))
+        return JsonNull();
+
+    return joSchema;
+}
+
+json schema_reference_ResolveRef(json joSchema, json jRef)
+{
+    string sRef = JsonGetString(jRef);
+    
+    if (sRef == "" || sRef == "#")
+        return joSchema;
+
+    /// @todo versioning for these strings and the schema itself (like 2020-12), what
+    ///     about future updates?
+    json jaMatch = RegExpMatch("^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?$", sRef);
+    if (jaMatch != JsonArray())
+    {
+        string sScheme = JsonGetString(JsonArrayGet(jaMatch, 2));
+        string sAuthority = JsonGetString(JsonArrayGet(jaMatch, 4));
+        string sPath = JsonGetString(JsonArrayGet(jaMatch, 5));
+        string sFragment = JsonGetString(JsonArrayGet(jaMatch, 9));
+        
+        /// @brief This case handles fragment-only references
+        if (sScheme == "" && sAuthority == "" && sPath == "" && sFragment != "")
+        {
+            if (GetStringLeft(sFragment, 1) == "/")
+                return schema_reference_ResolveRefPointer(joSchema, sFragment);
+            else
+                return schema_reference_ResolveRefAnchor(joSchema, sFragment);
+        }
+        
+        /// @brief Special case to handle recursive call to current schema
+        if (sPath != "" && sPath == JsonGetString(JsonObjectGet(joSchema, "id")))
+        {
+            if (sFragment != "")
+            {
+                if (GetStringLeft(sFragment, 1) == "/")
+                    return schema_reference_ResolveRefPointer(joSchema, sFragment);
+                else
+                    return schema_reference_ResolveRefAnchor(joSchema, sFragment);
+            }
+            else
+                return joSchema;
+        }
+        
+        /// @brief Handle all other schema references, including previously validated
+        ///     schemas (database) and file-based schemas.
+        json joTargetSchema = JsonNull();
+        
+        if (sPath != "")
+        {
+            string sSchemaID = sPath;
+            
+            if (sScheme == "file")
+            {
+                if (GetStringLeft(sPath, 1) == "/")
+                    sSchemaID = GetStringRight(sPath, GetStringLength(sPath) - 1);
+                else
+                    sSchemaID = sPath;
+                
+                joTargetSchema = schema_reference_ResolveRefFile(sSchemaID);
+            }
+            else
+            {
+                joTargetSchema = schema_reference_GetSchema(sSchemaID);
+                if (JsonGetType(joTargetSchema) == JSON_TYPE_NULL)
+                    joTargetSchema = schema_reference_ResolveRefFile(sSchemaID);
+            }
+            
+            if (JsonGetType(joTargetSchema) == JSON_TYPE_NULL)
+                return JsonNull();
+        }
+        else
+            return JsonNull();
+        
+        if (sFragment != "")
+        {
+            if (GetStringLeft(sFragment, 1) == "/")
+                return schema_reference_ResolveRefPointer(joTargetSchema, sFragment);
+            else
+                return schema_reference_ResolveRefAnchor(joTargetSchema, sFragment);
+        }
+        
+        return joTargetSchema;
+    }
+    else
+        return JsonNull();
+}
+
+/// @todo needs testing and validation ...
 json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 {
     /// @todo provide a real feedback message
@@ -606,12 +815,29 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 
     string s = r"
         WITH
+            path_conversion AS (
+                WITH path_elements AS (
+                    SELECT value
+                    FROM json_each(:path)
+                )
+                SELECT 
+                    CASE 
+                        WHEN COUNT(*) = 0 THEN ''
+                        ELSE GROUP_CONCAT(value, '.')
+                    END AS sqlite_path
+                FROM path_elements
+            ),
             schema_tree AS (
-                SELECT * FROM schema_table, json_tree(schema)
+                SELECT * json_tree(:schema)
             ),
             ancestors(id, parent, depth) AS (
-                SELECT id, parent, 0 FROM schema_tree WHERE id = 24
+                SELECT id, parent, 0 
+                FROM schema_tree, path_conversion
+                WHERE fullkey = sqlite_path
+                LIMIT 1
+                
                 UNION ALL
+                
                 SELECT st.id, st.parent, a.depth + 1
                 FROM schema_tree st
                 JOIN ancestors a ON st.id = a.parent
@@ -622,20 +848,20 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
                 FROM schema_tree st
                 JOIN ancestors a ON st.parent = a.id
                 WHERE st.key = '$dynamicAnchor'
-                AND st.atom = 'optionLevel'
-                ORDER BY a.depth ASC  -- Closest ancestor first!
+                AND st.atom = :anchor
+                ORDER BY a.depth ASC
                 LIMIT 1
             )
-
-        SELECT
-            json_extract(schema, '$' || substr(ca.path, 2)) AS object
-        FROM
-            schema_table, closest_anchor ca;
+        SELECT json_extract(schema, '$' || substr(path, 2)) AS object
+        FROM closest_anchor
+        UNION ALL
+        SELECT NULL WHERE NOT EXISTS (SELECT 1 FROM closest_anchor);
     ";
 
     sqlquery q = SqlPrepareQueryObject(GetModule(), s);
     SqlBindJson(q, ":schema", joSchema);
-    SqlBindJson(q, ":anchor", jsRef);
+    SqlBindJson(q, ":path", schema_path_Get());
+    SqlBindString(q, ":anchor", JsonGetString(jsRef));
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
 }
@@ -797,7 +1023,7 @@ json schema_validate_Pattern(json jsInstance, json jsPattern)
     
 /// @brief Validates the string "format" keyword.
 /// @param jInstance The instance to validate.
-/// @param jFormat The schema value for "format" (a string).
+/// @param jFormat The schema value for "format".
 /// @returns An output object containing the validation result.
 json schema_validate_Format(json jInstance, json jFormat)
 {
@@ -810,7 +1036,8 @@ json schema_validate_Format(json jInstance, json jFormat)
     string sFormat = JsonGetString(jFormat);
     int bValid = FALSE;
 
-    if (sFormat == "email")    {
+    if (sFormat == "email")    
+    {
         bValid = RegExpMatch("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$", sInstance) != JsonArray();
     }
     else if (sFormat == "hostname")
@@ -820,18 +1047,22 @@ json schema_validate_Format(json jInstance, json jFormat)
     }
     else if (sFormat == "ipv4")
     {
-        /// @todo fix this
-        bValid = FALSE;
-//        bValid = RegExpMatch("^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\."
-//                             "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\."
-//                             "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\."
-//                             "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$", sInstance) != JsonArray();
+        bValid = RegExpMatch("^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
+                           + "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
+                           + "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
+                           + "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$", sInstance) != JsonArray();
     }
     else if (sFormat == "ipv6")
     {
         bValid = RegExpMatch("^([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$", sInstance) != JsonArray()
-              || RegExpMatch("^::([0-9A-Fa-f]{1,4}:){0,5}[0-9A-Fa-f]{1,4}$", sInstance) != JsonArray()
-              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){1,6}:$", sInstance) != JsonArray();
+              || RegExpMatch("^::([0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}$", sInstance) != JsonArray()
+              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){1,7}:$", sInstance) != JsonArray()
+              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){1}(:[0-9A-Fa-f]{1,4}){1,6}$", sInstance) != JsonArray()
+              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){2}(:[0-9A-Fa-f]{1,4}){1,5}$", sInstance) != JsonArray()
+              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){3}(:[0-9A-Fa-f]{1,4}){1,4}$", sInstance) != JsonArray()
+              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){4}(:[0-9A-Fa-f]{1,4}){1,3}$", sInstance) != JsonArray()
+              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){5}(:[0-9A-Fa-f]{1,4}){1,2}$", sInstance) != JsonArray()
+              || RegExpMatch("^([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}){1}$", sInstance) != JsonArray();
     }
     else if (sFormat == "uri")
     {
@@ -839,9 +1070,7 @@ json schema_validate_Format(json jInstance, json jFormat)
     }
     else if (sFormat == "uri-reference")
     {
-        bValid = (sInstance == "")
-              || RegExpMatch("^[a-zA-Z][a-zA-Z0-9+.-]*:[^\\s]*$", sInstance) != JsonArray()
-              || RegExpMatch("^[/?#]", sInstance) != JsonArray();
+        bValid = (sInstance == "") || RegExpMatch("^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?$", sInstance) != JsonArray();
     }
     else if (sFormat == "iri")
     {
@@ -855,7 +1084,7 @@ json schema_validate_Format(json jInstance, json jFormat)
     }
     else if (sFormat == "date")
     {
-        bValid = RegExpMatch("^\\d{4}-\\d{2}-\\d{2}$", sInstance) != JsonArray();
+        bValid = RegExpMatch("^\\d{4}-((0[1-9])|(1[0-2]))-((0[1-9])|([12][0-9])|(3[01]))$", sInstance) != JsonArray();
     }
     else if (sFormat == "date-time")
     {
@@ -867,7 +1096,7 @@ json schema_validate_Format(json jInstance, json jFormat)
     }
     else if (sFormat == "duration")
     {
-        bValid = RegExpMatch("^P(?!$)(\\d+Y)?(\\d+M)?(\\d+D)?(T(\\d+H)?(\\d+M)?(\\d+S)?)?$", sInstance) != JsonArray();
+        bValid = RegExpMatch("^P(?!$)(\\d+Y)?(\\d+M)?(\\d+D)?(T(?!$)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$", sInstance) != JsonArray();
     }
     else if (sFormat == "json-pointer")
     {
@@ -875,15 +1104,20 @@ json schema_validate_Format(json jInstance, json jFormat)
     }
     else if (sFormat == "relative-json-pointer")
     {
-        bValid = RegExpMatch("^[0-9]+(#|(/([^/~]|~[01])*)*)$", sInstance) != JsonArray();
+        bValid = RegExpMatch("^(0|[1-9][0-9]*)(#|(/([^/~]|~[01])*)*)$", sInstance) != JsonArray();
     }
     else if (sFormat == "uuid")
     {
-        bValid = RegExpMatch("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", sInstance) != JsonArray();
+        bValid = RegExpMatch("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$", sInstance) != JsonArray();
     }
     else if (sFormat == "regex")
     {
         bValid = (GetStringLength(sInstance) > 0);
+        
+        if (bValid)
+        {
+            bValid = RegExpMatch("^[^\\\\]*(\\\\.[^\\\\]*)*$", sInstance) != JsonArray();
+        }
     }
     else
     {
@@ -1729,6 +1963,9 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     return joResult;
 }
+
+/// @todo the function that calls the validation must call the variable
+///     desctruction method first!
 
 // Registers (validates and saves) a schema (joSchema).
 // If a schema with the same $id exists, it is overwritten.
