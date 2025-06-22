@@ -9,8 +9,7 @@
 #include "util_i_library"
 #include "util_i_unittest"
 
-//#include "schema_i_core"
-#include "schema_i_core2"
+#include "schema_i_core"
 
 void schema_OnPlayerChat()
 {
