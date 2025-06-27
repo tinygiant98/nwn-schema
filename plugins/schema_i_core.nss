@@ -27,7 +27,7 @@ sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE)
 ///    the current path in a schema.  This data will primarily be used for providing
 ///    path information for error and annotation messages.
 
-void schema_path_Destroy()
+void schema_scope_Destroy()
 {
     DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
     DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL"));
@@ -146,7 +146,7 @@ json schema_path_Deconstruct(string sPath)
 string schema_scope_Construct(json jaPath = JSON_NULL)
 {
     if (JsonGetType(jaPath) == JSON_TYPE_NULL)
-        return jaPath;
+        return "";
 
     string s = r"
         WITH path_elements AS (
@@ -166,8 +166,8 @@ string schema_scope_Construct(json jaPath = JSON_NULL)
     return SqlStep(q) ? SqlGetString(q, 0) : "";
 }
 
-string schema_scope_ConstructLexical() {return schema_path_Construct(schema_scope_GetLexical());}
-string schema_scope_ConstructDynamic() {return schema_path_Construct(schema_scope_GetDynamic());}
+string schema_scope_ConstructLexical() {return schema_scope_Construct(schema_scope_GetLexical());}
+string schema_scope_ConstructDynamic() {return schema_scope_Construct(schema_scope_GetDynamic());}
 
 /// @brief Push a path into the schema path array.
 /// @param jsPath JSON string containing the path.
@@ -233,7 +233,7 @@ void schema_scope_Pop(string sScope)
 }
 
 void schema_scope_PopLexical() {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
-void schema_scope_PopDynamic() {schema_path_Pop("SCHEMA_SCOPE_DYNAMIC");}
+void schema_scope_PopDynamic() {schema_scope_Pop("SCHEMA_SCOPE_DYNAMIC");}
 
 void schema_scope_IncrementDepth()
 {
@@ -251,7 +251,7 @@ void schema_scope_DecrementDepth()
         if (JsonGetType(jaPaths) == JSON_TYPE_ARRAY && JsonGetLength(jaPaths) > nDepth)
             SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", JsonArrayGetRange(jaPaths, 0, nDepth));
         
-        jaPath = GetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC");
+        json jaPath = GetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC");
         if (JsonGetType(jaPath) == JSON_TYPE_ARRAY && JsonGetLength(jaPath) > nDepth)
             SetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC", JsonArrayGetRange(jaPath, 0, nDepth));
 
@@ -742,22 +742,7 @@ string schema_reference_NormalizePath(string sPath)
         }
         jaStack = JsonArrayInsert(jaStack, JsonString(s), JsonGetLength(jaStack)); // Add to end
     }
-    return schema_path_Construct(jaStack); // Re-join segments into path string
-}
-
-json schema_reference_GetSchema(string sID)
-{
-    string s = r"
-        SELECT * FROM schema_schema WHERE schema_id = :schema_id;
-    ";
-    sqlquery q = schema_core_PrepareQuery(s);
-    SqlBindString(q, ":schema_id", sID);
-
-    json joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
-    if (JsonGetType(joSchema) == JSON_TYPE_NULL)
-        return schema_reference_ResolveRefFile(sID);
-    else
-        return joSchema;
+    return schema_scope_Construct(jaStack); // Re-join segments into path string
 }
 
 void schema_reference_DeleteSchema(string sID)
@@ -788,7 +773,7 @@ void schema_reference_CreateTables()
 
     s = r"
         CREATE INDEX IF NOT EXISTS schema_index ON schema_schema (schema_id);
-    ;"
+    ;";
     SqlStep(schema_core_PrepareQuery(s));
 }
 
@@ -889,6 +874,21 @@ json schema_reference_ResolveRefFile(string sFile)
     return joSchema;
 }
 
+json schema_reference_GetSchema(string sID)
+{
+    string s = r"
+        SELECT * FROM schema_schema WHERE schema_id = :schema_id;
+    ";
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindString(q, ":schema_id", sID);
+
+    json joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+    if (JsonGetType(joSchema) == JSON_TYPE_NULL)
+        return schema_reference_ResolveRefFile(sID);
+    else
+        return joSchema;
+}
+
 json schema_reference_ResolveRefFragment(json joSchema, string sFragment)
 {
     if (GetStringLeft(sFragment, 1) == "/")
@@ -910,7 +910,7 @@ string schema_reference_MergePath(json jaMatchBase, string sPathRef)
         return "/" + sPathRef;
     else
     {
-        string sPathBase = JsonGetString(jaMatchBase, 5);
+        string sPathBase = JsonGetString(JsonArrayGet(jaMatchBase, 5));
         json jaMatch = RegExpMatch("^(.*\\/)", sPathBase);
         if (JsonGetType(jaMatch) != JSON_TYPE_NULL && jaMatch != JsonArray())
             return JsonGetString(JsonArrayGet(jaMatch, 1)) + sPathRef;
@@ -2216,7 +2216,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     if (JsonFind(jaSchemaKeys, JsonString("$dynamicAnchor")) != JsonNull())
     {
         schema_scope_PushDynamic(joSchema);
-        bDynamicAnchor = TRUE:
+        bDynamicAnchor = TRUE;
     }
 
     json jRef = JsonObjectGet(joSchema, "$ref");
@@ -2383,5 +2383,34 @@ int ValidateInstanceAdHoc(json jInstance, json joSchema) {
     // TODO: Validate joSchema against metaschema
     // TODO: If $id is present, optionally register
     // TODO: Validate jInstance using schema_core_Validate
+    
+    schema_reference_CreateTables();
+    schema_scope_Destroy();
+
+    json joOutputUnit = schema_core_Validate(jInstance, joSchema);
+
+    if (schema_output_GetValid(joOutputUnit))
+    {
+        json jsId = JsonObjectGet(joSchema, "$id");
+        if (jsId != JSON_NULL && JsonGetType(jsId) == JSON_TYPE_STRING)
+        {
+            schema_reference_SaveSchema(joSchema);
+            return TRUE;
+        }
+    }
+    else
+    {
+        // Schema is invalid!
+    }
+    
     return 0; // stub
 }
+
+/*
+    entry points need to:
+    - create the required tables
+    - schedule the variable destruction
+    - call for schema validation
+    - save the schema is valid and an id exists
+*/
+
