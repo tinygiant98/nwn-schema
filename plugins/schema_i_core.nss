@@ -29,18 +29,19 @@ sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE)
 
 void schema_path_Destroy()
 {
-    DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH"));
-    DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS"));
+    DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
+    DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL"));
+    DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC"));
 }
 
-int schema_path_GetDepth(int bDepthOnly = FALSE)
+int schema_scope_GetDepth(int bDepthOnly = FALSE)
 {
-    int nDepth = GetLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH");
+    int nDepth = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH");
     nDepth = nDepth == 0 ? 1 : nDepth;
 
     if (!bDepthOnly)
     {
-        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
         if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
             jaPaths = JsonArray();
         
@@ -49,17 +50,17 @@ int schema_path_GetDepth(int bDepthOnly = FALSE)
             while (JsonGetLength(jaPaths) <= nDepth)
                 jaPaths = JsonArrayInsert(jaPaths, JsonArray());
 
-            SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", jaPaths);        
+            SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", jaPaths);        
         }
     }
 
     return nDepth;
 }
 
-json schema_path_Get()
+json schema_scope_Get(string sScope)
 {
-    int nDepth = schema_path_GetDepth();
-    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+    int nDepth = schema_scope_GetDepth();
+    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
     if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY || JsonGetLength(jaPaths) <= nDepth)
         return JsonArray();
     
@@ -68,6 +69,34 @@ json schema_path_Get()
         return JsonArray();
     
     return jaPath;
+}
+
+json schema_scope_GetLexical() {return schema_scope_Get("SCHEMA_SCOPE_LEXICAL");}
+json schema_scope_GetDynamic() {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");}
+
+json schema_scope_GetDynamicAnchor(string sDynamicAnchor)
+{
+    json jaDynamic = schema_scope_GetDynamic();
+    if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
+        return JsonObject();
+
+    int nDepth = schema_scope_GetDepth(TRUE);
+    if (nDepth >= JsonGetLength(jaDynamic))
+        return JsonObject();
+
+    json jaSchema = JsonArrayGet(jaDynamic, nDepth);
+    if (JsonGetType(jaSchema) != JSON_TYPE_ARRAY || JsonGetLength(jaSchema) == 0)
+        return JsonObject();
+
+    int i; for (; i < JsonGetLength(jaSchema); i++)
+    {
+        json joSchema = JsonArrayGet(jaSchema, i);
+        json jsAnchor = JsonObjectGet(joSchema, "$dynamicAnchor");
+        if (JsonGetType(jsAnchor) == JSON_TYPE_STRING && JsonGetString(jsAnchor) == sDynamicAnchor)
+            return joSchema;
+    }
+
+    return JsonObject();
 }
 
 json schema_path_Deconstruct(string sPath)
@@ -108,16 +137,16 @@ json schema_path_Deconstruct(string sPath)
         FROM split_string
         WHERE part != '';
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareQuery(s, TRUE);
     SqlBindString(q, ":path", sPath);
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
 }
 
-string schema_path_Construct(json jPath = JSON_NULL)
+string schema_scope_Construct(json jaPath = JSON_NULL)
 {
-    if (JsonGetType(jPath) == JSON_TYPE_NULL)
-        jPath = schema_path_Get();
+    if (JsonGetType(jaPath) == JSON_TYPE_NULL)
+        return jaPath;
 
     string s = r"
         WITH path_elements AS (
@@ -131,19 +160,22 @@ string schema_path_Construct(json jPath = JSON_NULL)
             END AS path
         FROM path_elements;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
-    SqlBindJson(q, ":schema_path", jPath);
+    sqlquery q = schema_core_PrepareQuery(s, TRUE);
+    SqlBindJson(q, ":schema_path", jaPath);
 
     return SqlStep(q) ? SqlGetString(q, 0) : "";
 }
 
+string schema_scope_ConstructLexical() {return schema_path_Construct(schema_scope_GetLexical());}
+string schema_scope_ConstructDynamic() {return schema_path_Construct(schema_scope_GetDynamic());}
+
 /// @brief Push a path into the schema path array.
 /// @param jsPath JSON string containing the path.
 /// @returns The updated path array.
-void schema_path_Push(string sFragment)
+void schema_scope_PushLexical(string sPath)
 {
-    int nDepth = schema_path_GetDepth();
-    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+    int nDepth = schema_scope_GetDepth();
+    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
     
     if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
         jaPaths = JsonArray();
@@ -156,17 +188,38 @@ void schema_path_Push(string sFragment)
     if (JsonGetType(jaPath) != JSON_TYPE_ARRAY)
         jaPath = JsonArray();
     
-    jaPath = JsonArrayInsert(jaPath, JsonString(sFragment));
+    jaPath = JsonArrayInsert(jaPath, JsonString(sPath));
     jaPaths = JsonArraySet(jaPaths, nDepth, jaPath);
-    SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", jaPaths);
+    SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", jaPaths);
+}
+
+void schema_scope_PushDynamic(json jScope)
+{
+    int nDepth = schema_scope_GetDepth();
+    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC");
+    
+    if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
+        jaPaths = JsonArray();
+    
+    while (JsonGetLength(jaPaths) <= nDepth)
+        jaPaths = JsonArrayInsert(jaPaths, JsonArray());
+    
+    json jaPath = JsonArrayGet(jaPaths, nDepth);
+    
+    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY)
+        jaPath = JsonArray();
+    
+    jaPath = JsonArrayInsert(jaPath, jScope);
+    jaPaths = JsonArraySet(jaPaths, nDepth, jaPath);
+    SetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC", jaPaths);
 }
 
 /// @brief Pop the last path from the path array.
 /// @returns The last path in the array, or an empty JSON string.
-void schema_path_Pop()
+void schema_scope_Pop(string sScope)
 {
-    int nDepth = schema_path_GetDepth();
-    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+    int nDepth = schema_scope_GetDepth();
+    json jaPaths = GetLocalJson(GetModule(), sScope);
     
     if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY || JsonGetLength(jaPaths) <= nDepth)
         return;
@@ -176,26 +229,33 @@ void schema_path_Pop()
         return;
     
     jaPaths = JsonArraySet(jaPaths, nDepth, (JsonGetLength(jaPath) == 1) ? JsonArray() : JsonArrayGetRange(jaPath, 0, -2));
-    SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", jaPaths);
+    SetLocalJson(GetModule(), sScope, jaPaths);
 }
 
-void schema_path_IncrementDepth()
+void schema_scope_PopLexical() {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
+void schema_scope_PopDynamic() {schema_path_Pop("SCHEMA_SCOPE_DYNAMIC");}
+
+void schema_scope_IncrementDepth()
 {
-    int nDepth = schema_path_GetDepth(TRUE);
-    SetLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH", ++nDepth);
-    schema_path_GetDepth();
+    int nDepth = schema_scope_GetDepth(TRUE);
+    SetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH", ++nDepth);
+    schema_scope_GetDepth();
 }
 
-void schema_path_DecrementDepth()
+void schema_scope_DecrementDepth()
 {
-    int nDepth = schema_path_GetDepth(TRUE);
+    int nDepth = schema_scope_GetDepth(TRUE);
     if (nDepth > 1)
     {
-        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS");
+        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
         if (JsonGetType(jaPaths) == JSON_TYPE_ARRAY && JsonGetLength(jaPaths) > nDepth)
-            SetLocalJson(GetModule(), "SCHEMA_VALIDATION_PATHS", JsonArrayGetRange(jaPaths, 0, nDepth));
+            SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", JsonArrayGetRange(jaPaths, 0, nDepth));
         
-        SetLocalInt(GetModule(), "SCHEMA_VALIDATION_DEPTH", --nDepth);
+        jaPath = GetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC");
+        if (JsonGetType(jaPath) == JSON_TYPE_ARRAY && JsonGetLength(jaPath) > nDepth)
+            SetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC", JsonArrayGetRange(jaPath, 0, nDepth));
+
+        SetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH", --nDepth);
     }
 }
 
@@ -477,7 +537,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
 
 json schema_output_SetKeywordLocation(json jOutput)
 {
-    return JsonObjectSet(jOutput, "keywordLocation", JsonString(schema_path_Construct()));
+    return JsonObjectSet(jOutput, "keywordLocation", JsonString(schema_scope_ConstructLexical()));
 }
 
 json schema_output_GetOutputUnit()
@@ -751,7 +811,7 @@ json schema_reference_ResolveRefPointer(json joSchema, string sPointer)
         WHERE fullkey = (SELECT path FROM schema_path)
         LIMIT 1;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareQuery(s, TRUE);
     SqlBindJson(q, ":schema", joSchema);
     SqlBindString(q, ":pointer", sPointer);
 
@@ -767,10 +827,10 @@ json schema_reference_ResolveRefFile(string sFile)
     if (JsonGetType(joSchema) == JSON_TYPE_NULL)
         return JsonNull();
 
-    schema_path_IncrementDepth();
+    schema_scope_IncrementDepth();
     json joResult = schema_core_Validate(joSchema, JsonNull());
     /// @todo need metaschema getter here           ^^^^^^^^^^
-    schema_path_DecrementDepth();
+    schema_scope_DecrementDepth();
 
     if (!schema_output_GetValid(joResult))
         return JsonNull();
@@ -1106,7 +1166,7 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 
     sqlquery q = SqlPrepareQueryObject(GetModule(), s);
     SqlBindJson(q, ":schema", joSchema);
-    SqlBindJson(q, ":path", schema_path_Get());
+    SqlBindJson(q, ":path", schema_scope_GetLexical());
     SqlBindString(q, ":anchor", JsonGetString(jsRef));
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
@@ -1154,13 +1214,13 @@ json schema_validate_Type(json jInstance, json jType)
     {
         int i; for (; i < JsonGetLength(jType); i++)
         {
-            schema_path_Push(IntToString(i));
+            schema_scope_PushLexical(IntToString(i));
 
             json joValidate = schema_validate_Type(jInstance, JsonArrayGet(jType, i));
             if (schema_output_GetValid(joValidate))
                 joOutputUnit = joValidate;
 
-            schema_path_Pop();
+            schema_scope_PopLexical();
         }
     }
 
@@ -1703,13 +1763,13 @@ json schema_validate_Required(json joInstance, json jaRequired)
     json jaInstanceKeys = JsonObjectKeys(joInstance);
     int i; for (; i < JsonGetLength(jaRequired); i++)
     {
-        schema_path_Push(IntToString(i));
+        schema_scope_PushLexical(IntToString(i));
 
         json jProperty = JsonArrayGet(jaRequired, i);
         if (JsonFind(jaInstanceKeys, jProperty) == JsonNull())
             jaMissingProperties = JsonArrayInsert(jaMissingProperties, jProperty);
 
-        schema_path_Pop();
+        schema_scope_PopLexical();
     }
 
     if (JsonGetLength(jaMissingProperties) > 0)
@@ -1980,12 +2040,12 @@ json schema_validate_AllOf(json jInstance, json jaAllOf)
 
     int i; for (; i < JsonGetLength(jaAllOf); i++)
     {
-        schema_path_Push(IntToString(i));
+        schema_scope_PushLexical(IntToString(i));
 
         if (!schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jaAllOf, i))))
             return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<validate_allof>"));
     
-        schema_path_Pop();
+        schema_scope_PopLexical();
     }
 
     return schema_output_InsertAnnotation(joOutputUnit, "allOf", jaAllOf);
@@ -2001,12 +2061,12 @@ json schema_validate_AnyOf(json jInstance, json jaAnyOf)
 
     int i; for (; i < JsonGetLength(jaAnyOf); i++)
     {
-        schema_path_Push(IntToString(i));
+        schema_scope_PushLexical(IntToString(i));
 
         if (schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jaAnyOf, i))))
             return schema_output_InsertAnnotation(joOutputUnit, "anyOf", jaAnyOf);
 
-        schema_path_Pop();
+        schema_scope_PopLexical();
     }
 
     return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<validate_anyof>"));
@@ -2024,18 +2084,18 @@ json schema_validate_OneOf(json jInstance, json jaOneOf)
     int i; nMatches = 0;
     for (i = 0; i < JsonGetLength(jaOneOf); i++)
     {
-        schema_path_Push(IntToString(i));
+        schema_scope_PushLexical(IntToString(i));
 
         if (schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jaOneOf, i))))
         {
             if (++nMatches > 1)
             {
-                schema_path_Pop();
+                schema_scope_PopLexical();
                 break;
             }
         }
 
-        schema_path_Pop();
+        schema_scope_PopLexical();
     }
 
     if (nMatches == 1)
@@ -2101,21 +2161,28 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     json jaSchemaKeys = JsonObjectKeys(joSchema);
     
+    int bDynamicAnchor = FALSE;
+    if (JsonFind(jaSchemaKeys, JsonString("$dynamicAnchor")) != JsonNull())
+    {
+        schema_scope_PushDynamic(joSchema);
+        bDynamicAnchor = TRUE:
+    }
+
     json jRef = JsonObjectGet(joSchema, "$ref");
     if (jRef != JSON_NULL)
     {
-        schema_path_Push("$ref");
+        schema_scope_PushLexical("$ref");
         joResult = schema_core_Validate(jInstance, schema_reference_ResolveRef(joSchema, jRef));
-        schema_path_Pop();
+        schema_scope_PopLexical();
         return joResult;
     }
 
     jRef = JsonObjectGet(joSchema, "$dynamicRef");
     if (JsonGetType(jRef) != JSON_TYPE_NULL)
     {
-        schema_path_Push("$dynamicRef");
+        schema_scope_PushLexical("$dynamicRef");
         joResult = schema_core_Validate(jInstance, schema_reference_ResolveDynamicRef(joSchema, jRef));
-        schema_path_Pop();
+        schema_scope_PopLexical();
         return joResult;
     }
 
@@ -2126,7 +2193,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     int i; for (; i < JsonGetLength(jaSchemaKeys); i++)
     {
         string sKey = JsonGetString(JsonArrayGet(jaSchemaKeys, i));
-        schema_path_Push(sKey);
+        schema_scope_PushLexical(sKey);
         
         if (sKey == "if" || sKey == "then" || sKey == "else")
         {
@@ -2205,8 +2272,11 @@ json schema_core_Validate(json jInstance, json joSchema)
         else if (sKey == "uniqueItems")      {joResult = schema_validate_UniqueItems(jInstance, JsonObjectGet(joSchema, sKey));}
         else if (sKey == "format")           {joResult = schema_validate_Format(jInstance, JsonObjectGet(joSchema, sKey));}
 
-        schema_path_Pop();
+        schema_scope_PopLexical();
     }
+
+    if (bDynamicAnchor)
+        schema_scope_PopDynamic();
 
     return joResult;
 }
