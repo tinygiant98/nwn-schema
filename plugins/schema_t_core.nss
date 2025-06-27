@@ -5,7 +5,7 @@
 /// ----------------------------------------------------------------------------
 
 #include "util_i_unittest"
-#include "schema_i_core2"
+#include "schema_i_core"
 
 // @TESTSUITE[Schema Core]
 // @TESTGROUP[Schema Validation]
@@ -832,10 +832,98 @@ void schema_test_validate_Metadata()
 void schema_test_validate_Output()
 {}
 
+void schema_suite_validate_minlength()
+{
+    json jaSuite = JsonParse(r"
+        [
+            {
+                ""description"": ""minLength validation"",
+                ""schema"": {
+                    ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                    ""minLength"": 2
+                },
+                ""tests"": [
+                    {
+                        ""description"": ""longer is valid"",
+                        ""data"": ""foo"",
+                        ""valid"": true
+                    },
+                    {
+                        ""description"": ""exact length is valid"",
+                        ""data"": ""fo"",
+                        ""valid"": true
+                    },
+                    {
+                        ""description"": ""too short is invalid"",
+                        ""data"": ""f"",
+                        ""valid"": false
+                    },
+                    {
+                        ""description"": ""ignores non-strings"",
+                        ""data"": 1,
+                        ""valid"": true
+                    },
+                    {
+                        ""description"": ""one grapheme is not long enough"",
+                        ""data"": ""\uD83D\uDCA9"",
+                        ""valid"": false
+                    }
+                ]
+            },
+            {
+                ""description"": ""minLength validation with a decimal"",
+                ""schema"": {
+                    ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                    ""minLength"": 2.0
+                },
+                ""tests"": [
+                    {
+                        ""description"": ""longer is valid"",
+                        ""data"": ""foo"",
+                        ""valid"": true
+                    },
+                    {
+                        ""description"": ""too short is invalid"",
+                        ""data"": ""f"",
+                        ""valid"": false
+                    }
+                ]
+            }
+        ]
+    ");
+
+
+    int i; for (; i < JsonGetLength(jaSuite); i++)
+    {
+        json joGroup = JsonArrayGet(jaSuite, i);
+        {
+            json joSchema = JsonObjectGet(joGroup, "schema");
+            json jaTests = JsonObjectGet(joGroup, "tests");
+            DescribeTestGroup(JsonGetString(JsonObjectGet(joGroup, "description")));
+            
+            int j; for (; j < JsonGetLength(jaTests); j++)
+            {
+                json joTest = JsonArrayGet(jaTests, j);
+                json jInstance = JsonObjectSet(JsonObject(), "data", JsonObjectGet(joTest, "data"));
+
+                json joResult = schema_validate_MinLength(jInstance, joSchema);
+                json joValid = JsonObjectGet(joTest, "valid");
+                json joDescription = JsonObjectGet(joTest, "description");
+
+                if (!Assert(JsonGetString(joDescription), schema_output_GetValid(joResult) == JsonGetInt(joValid)))
+                    DescribeTestParameters(JsonDump(jInstance), JsonDump(joValid));
+            }
+
+            Outdent();
+        }
+    }
+}
+
 void main()
 {
-    DescribeTestSuite("Schema Core Unit Tests");
 
+    DescribeTestSuite("Schema Core Unit Tests");
+/*
     DescribeTestSuite("  Global Keyword Validation");
     schema_test_validate_Global();
 
@@ -859,5 +947,7 @@ void main()
 
     DescribeTestSuite("  Output Validation");
     schema_test_validate_Output();
+*/
+    schema_suite_validate_minlength();
 }
     

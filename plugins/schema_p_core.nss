@@ -35,7 +35,7 @@ void schema_OnPlayerChat()
 //    json joResult = schema_core_Validate(jInstance, jSchema);
 //    Debug("Validation Result: " + JsonDump(joResult, 4));
 
-int TEST = 2;
+int TEST = 4;
 
     if (TEST == 0)
     {
@@ -75,6 +75,8 @@ int TEST = 2;
         json d = JsonArrayGetRange(c, 0, -2);
         Debug("Cut Down Single Element Array: " + JsonDump(d));
     }
+    else if (TEST = 4)
+        ExecuteScript("schema_t_core");
 
 
 
