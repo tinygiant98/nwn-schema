@@ -748,9 +748,7 @@ string schema_reference_NormalizePath(string sPath)
 json schema_reference_GetSchema(string sID)
 {
     string s = r"
-        SELECT schema
-        FROM schema_schema
-        WHERE json_extract(schema, '$.$id') = :schema_id;
+        SELECT * FROM schema_schema WHERE schema_id = :schema_id;
     ";
     sqlquery q = schema_core_PrepareQuery(s);
     SqlBindString(q, ":schema_id", sID);
@@ -760,6 +758,59 @@ json schema_reference_GetSchema(string sID)
         return schema_reference_ResolveRefFile(sID);
     else
         return joSchema;
+}
+
+void schema_reference_DeleteSchema(string sID)
+{
+    if (sID == "")
+        return;
+
+    string s = r"
+        DELETE FROM schema_schema WHERE schema_id = :schema_id;
+    ";
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindString(q, ":schema_id", sID);
+
+    SqlStep(q);
+}
+
+void schema_reference_CreateTables()
+{
+    string s = r"
+        CREATE TABLE IF NOT EXISTS schema_schema (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schema TEXT NOT NULL,
+            schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$id')) STORED,
+            UNIQUE(schema_id)
+        );
+    ";
+    SqlStep(schema_core_PrepareQuery(s));
+
+    s = r"
+        CREATE INDEX IF NOT EXISTS schema_index ON schema_schema (schema_id);
+    ;"
+    SqlStep(schema_core_PrepareQuery(s));
+}
+
+void schema_reference_SaveSchema(json joSchema)
+{
+    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT)
+        return;
+
+    string sID = JsonGetString(JsonObjectGet(joSchema, "$id"));
+    if (sID == "")
+        return;
+
+    string s = r"
+        INSERT INTO schema_schema (schema)
+        VALUES (:schema)
+        ON CONFLICT(schema) DO UPDATE SET
+            schema = :schema;
+    ";
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindJson(q, ":schema", joSchema);
+
+    SqlStep(q);
 }
 
 /// @todo this needs to be ResolveRef and ResolveDynamicRef (?)
