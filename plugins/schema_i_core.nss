@@ -1,25 +1,5 @@
 
 #include "util_i_debug"
-/// @todo debug functions ... probably get rid of these for production?
-
-string schema_debug_JsonToType(json j)
-{
-    int nType = JsonGetType(j);
-    // Returns a string representation of the JSON type
-    switch (nType)
-    {
-        case JSON_TYPE_NULL: return "null";
-        case JSON_TYPE_BOOL: return "boolean";
-        case JSON_TYPE_INTEGER: return "integer";
-        case JSON_TYPE_FLOAT: return "float";
-        case JSON_TYPE_STRING: return "string";
-        case JSON_TYPE_ARRAY: return "array";
-        case JSON_TYPE_OBJECT: return "object";
-        default: return "unknown";
-    }
-
-    return "";
-}
 
 json schema_core_Validate(json jInstance, json joSchema);
 
@@ -155,28 +135,6 @@ string schema_path_Construct(json jPath = JSON_NULL)
     SqlBindJson(q, ":schema_path", jPath);
 
     return SqlStep(q) ? SqlGetString(q, 0) : "";
-}
-
-string schema_path_Normalize(string sPath)
-{
-    json jaParts = schema_path_Deconstruct(sPath); // Split path into array segments
-    json jaStack = JsonArray(); // Initialize empty stack
-
-    int i, n = JsonGetLength(jaParts);
-    for (i = 0; i < n; i++)
-    {
-        string s = JsonGetString(JsonArrayGet(jaParts, i));
-        if (s == "" || s == ".")
-            continue;
-        if (s == "..")
-        {
-            if (JsonGetLength(jaStack) > 0)
-                jaStack = JsonArrayGetRange(jaStack, 0, -2); // Remove last segment
-            continue;
-        }
-        jaStack = JsonArrayInsert(jaStack, JsonString(s), JsonGetLength(jaStack)); // Add to end
-    }
-    return schema_path_Construct(jaStack); // Re-join segments into path string
 }
 
 /// @brief Push a path into the schema path array.
@@ -705,6 +663,28 @@ json schema_output_Detailed(json joOutputUnit)
 /// @todo align sqlite variable names across functions
 /// @todo build documentation!
 
+string schema_reference_NormalizePath(string sPath)
+{
+    json jaParts = schema_path_Deconstruct(sPath); // Split path into array segments
+    json jaStack = JsonArray(); // Initialize empty stack
+
+    int i, n = JsonGetLength(jaParts);
+    for (i = 0; i < n; i++)
+    {
+        string s = JsonGetString(JsonArrayGet(jaParts, i));
+        if (s == "" || s == ".")
+            continue;
+        if (s == "..")
+        {
+            if (JsonGetLength(jaStack) > 0)
+                jaStack = JsonArrayGetRange(jaStack, 0, -2); // Remove last segment
+            continue;
+        }
+        jaStack = JsonArrayInsert(jaStack, JsonString(s), JsonGetLength(jaStack)); // Add to end
+    }
+    return schema_path_Construct(jaStack); // Re-join segments into path string
+}
+
 json schema_reference_GetSchema(string sID)
 {
     string s = r"
@@ -812,7 +792,7 @@ json schema_reference_ResolveRefFragment(json joSchema, string sFragment)
     }
 }
 
-string schema_path_Merge(json jaMatchBase, string sPathRef)
+string schema_reference_MergePath(json jaMatchBase, string sPathRef)
 {
     if (JsonGetString(JsonArrayGet(jaMatchBase, 3)) != "" &&
         JsonGetString(JsonArrayGet(jaMatchBase, 5)) == "")
@@ -1007,7 +987,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
         {
             sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 1));
             sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 3));
-            sTargetURI += schema_path_Normalize(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
+            sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
             sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6));
         }
         else
@@ -1015,7 +995,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
             if (JsonGetString(JsonArrayGet(jaMatchRef, 3)) != "")
             {
                 sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 3));
-                sTargetURI += schema_path_Normalize(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
+                sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
                 sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6));
             }
             else
@@ -1031,11 +1011,11 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
                 else
                 {
                     if (GetStringLeft(JsonGetString(JsonArrayGet(jaMatchRef, 5)), 1) == "/")
-                        sTargetURI += schema_path_Normalize(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
+                        sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
                     else 
                     {
-                        sTargetURI += schema_path_Merge(jaMatchBase, JsonGetString(JsonArrayGet(jaMatchRef, 5)));
-                        sTargetURI = schema_path_Normalize(sTargetURI);
+                        sTargetURI += schema_reference_MergePath(jaMatchBase, JsonGetString(JsonArrayGet(jaMatchRef, 5)));
+                        sTargetURI = schema_reference_NormalizePath(sTargetURI);
                     }
                     sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6));
                 }
@@ -1678,6 +1658,7 @@ json schema_validate_Array(
         
         for (i = 0; i < nInstanceLength; i++)
         {
+            /// @todo this fucntion doesn't work.  Do something else.
             if (!schema_HasKey(joEvalMap, IntToString(i)))
             {
                 json jItem = JsonArrayGet(jaInstance, i);
