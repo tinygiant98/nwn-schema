@@ -21,12 +21,11 @@ sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE)
 }
 
 /// -----------------------------------------------------------------------------------------------
-///                                         PATH MANAGEMENT
+///                                         SCOPE MANAGEMENT
 /// -----------------------------------------------------------------------------------------------
-/// @brief Schema path management functions.  These functions provide a method for recording
-///    the current path in a schema.  This data will primarily be used for providing
-///    path information for error and annotation messages.
 
+/// @private Destroy all scope-associated local variables to ensure scope data from multiple
+///     validations attempts does not collide.
 void schema_scope_Destroy()
 {
     DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
@@ -34,6 +33,11 @@ void schema_scope_Destroy()
     DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC"));
 }
 
+/// @private Get the current scope depth.
+/// @param bDepthOnly If TRUE, only the depth is returned without initializing the scope arrays.
+/// @returns The current scope depth, starting at 1.
+/// @note The first array entry is an empty array. This construct allows for each initialization
+///     of scope management arrays.
 int schema_scope_GetDepth(int bDepthOnly = FALSE)
 {
     int nDepth = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH");
@@ -57,6 +61,9 @@ int schema_scope_GetDepth(int bDepthOnly = FALSE)
     return nDepth;
 }
 
+/// @private Get the current scope data for the specified scope type.
+/// @param sScope The scope type, either "SCHEMA_SCOPE_LEXICAL" or "SCHEMA_SCOPE_DYNAMIC".
+/// @returns A json array containing the data for the current scope depth.
 json schema_scope_Get(string sScope)
 {
     int nDepth = schema_scope_GetDepth();
@@ -71,9 +78,14 @@ json schema_scope_Get(string sScope)
     return jaPath;
 }
 
+/// @private Convenience functions to get the lexical and dynamic scope data.
 json schema_scope_GetLexical() {return schema_scope_Get("SCHEMA_SCOPE_LEXICAL");}
 json schema_scope_GetDynamic() {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");}
 
+/// @private Resolve a dynamic anchor subschema from the current dynamic scope.
+/// @param sDynamicAnchor The dynamic anchor to resolve.
+/// @returns The resolved dynamic anchor schema as a json object, or an empty
+///     json object if not found.
 json schema_scope_GetDynamicAnchor(string sDynamicAnchor)
 {
     json jaDynamic = schema_scope_GetDynamic();
@@ -88,7 +100,7 @@ json schema_scope_GetDynamicAnchor(string sDynamicAnchor)
     if (JsonGetType(jaSchema) != JSON_TYPE_ARRAY || JsonGetLength(jaSchema) == 0)
         return JsonObject();
 
-    int i; for (; i < JsonGetLength(jaSchema); i++)
+    int i; for (i = 1; i <= JsonGetLength(jaSchema); i++)
     {
         json joSchema = JsonArrayGet(jaSchema, i);
         json jsAnchor = JsonObjectGet(joSchema, "$dynamicAnchor");
@@ -99,7 +111,10 @@ json schema_scope_GetDynamicAnchor(string sDynamicAnchor)
     return JsonObject();
 }
 
-json schema_path_Deconstruct(string sPath)
+/// @private Deconstruct a path string into an array of path segments.
+/// @param sPath The path string to deconstruct.
+/// @returns A json array containing the path segments, or an empty json array if the path is empty.
+json schema_scope_Deconstruct(string sPath)
 {
     string s = r"
         WITH RECURSIVE split_string(input_string, part, rest) AS (
@@ -143,6 +158,9 @@ json schema_path_Deconstruct(string sPath)
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
 }
 
+/// @private Construct a path string from a json array of path segments.
+/// @param jaPath The json array containing the path segments.
+/// @returns A string representing the path, or an empty string if the input is null or empty.
 string schema_scope_Construct(json jaPath = JSON_NULL)
 {
     if (JsonGetType(jaPath) == JSON_TYPE_NULL)
@@ -166,12 +184,17 @@ string schema_scope_Construct(json jaPath = JSON_NULL)
     return SqlStep(q) ? SqlGetString(q, 0) : "";
 }
 
+/// @todo
+///     [ ] This function doesn't appear to make sense in the context of dynamic scopes given
+///         that the dynamic scope array is an array of objects, not an array of strings.
+///         schema_scope_ConstructDynamic should likely be removed.
+
+/// @private Convenience functions to construct arrays for lexical and dynamic scopes.
 string schema_scope_ConstructLexical() {return schema_scope_Construct(schema_scope_GetLexical());}
 string schema_scope_ConstructDynamic() {return schema_scope_Construct(schema_scope_GetDynamic());}
 
-/// @brief Push a path into the schema path array.
-/// @param jsPath JSON string containing the path.
-/// @returns The updated path array.
+/// @private Push a path segment into the lexical scope array.
+/// @param sPath A string containing the path segment to push.
 void schema_scope_PushLexical(string sPath)
 {
     int nDepth = schema_scope_GetDepth();
@@ -193,6 +216,8 @@ void schema_scope_PushLexical(string sPath)
     SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", jaPaths);
 }
 
+/// @private Push a dynamic scope into the dynamic scope array.
+/// @param jScope A json object representing the dynamic scope to push.
 void schema_scope_PushDynamic(json jScope)
 {
     int nDepth = schema_scope_GetDepth();
@@ -215,6 +240,7 @@ void schema_scope_PushDynamic(json jScope)
 }
 
 /// @brief Pop the last path from the path array.
+/// @param sScope The scope type, either "SCHEMA_SCOPE_LEXICAL" or "SCHEMA_SCOPE_DYNAMIC".
 /// @returns The last path in the array, or an empty JSON string.
 void schema_scope_Pop(string sScope)
 {
@@ -232,9 +258,12 @@ void schema_scope_Pop(string sScope)
     SetLocalJson(GetModule(), sScope, jaPaths);
 }
 
+/// @private Convenience functions to pop the last path from the lexical and dynamic scope arrays.
 void schema_scope_PopLexical() {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
 void schema_scope_PopDynamic() {schema_scope_Pop("SCHEMA_SCOPE_DYNAMIC");}
 
+/// @private Increment the current scope depth by 1 and modify the lexical and dynamic scope
+///     arrays to handle the additional depth.
 void schema_scope_IncrementDepth()
 {
     int nDepth = schema_scope_GetDepth(TRUE);
@@ -242,6 +271,8 @@ void schema_scope_IncrementDepth()
     schema_scope_GetDepth();
 }
 
+/// @private Decrement the current scope depth by 1 and reduce the lexical and dynamic scope
+///     arrays to match the new depth.  If the depth is already at 1, no changes are made.
 void schema_scope_DecrementDepth()
 {
     int nDepth = schema_scope_GetDepth(TRUE);
@@ -725,7 +756,7 @@ json schema_output_Detailed(json joOutputUnit)
 
 string schema_reference_NormalizePath(string sPath)
 {
-    json jaParts = schema_path_Deconstruct(sPath); // Split path into array segments
+    json jaParts = schema_scope_Deconstruct(sPath); // Split path into array segments
     json jaStack = JsonArray(); // Initialize empty stack
 
     int i, n = JsonGetLength(jaParts);
@@ -813,7 +844,7 @@ json schema_reference_ResolveRefAnchor(json joSchema, string sAnchor)
                 FROM schema_tree
                 WHERE key = '$anchor'
                 AND atom = :anchor
-        )
+            )
         SELECT value 
         FROM schema_tree 
         WHERE id = (SELECT parent from schema_parent);
@@ -868,7 +899,9 @@ json schema_reference_ResolveRefFile(string sFile)
     /// @todo need metaschema getter here           ^^^^^^^^^^
     schema_scope_DecrementDepth();
 
-    if (!schema_output_GetValid(joResult))
+    if (schema_output_GetValid(joResult))
+        schema_reference_SaveSchema(joSchema);
+    else
         return JsonNull();
 
     return joSchema;
@@ -1163,64 +1196,9 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
     return JsonNull();
 }
 
-/// @todo needs testing and validation ...
 json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 {
-    /// @todo provide a real feedback message
-    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT || JsonGetType(jsRef) != JSON_TYPE_STRING)
-        return JsonNull();
-
-    string s = r"
-        WITH
-            path_conversion AS (
-                WITH path_elements AS (
-                    SELECT value
-                    FROM json_each(:path)
-                )
-                SELECT 
-                    CASE 
-                        WHEN COUNT(*) = 0 THEN ''
-                        ELSE GROUP_CONCAT(value, '.')
-                    END AS sqlite_path
-                FROM path_elements
-            ),
-            schema_tree AS (
-                SELECT * json_tree(:schema)
-            ),
-            ancestors(id, parent, depth) AS (
-                SELECT id, parent, 0 
-                FROM schema_tree, path_conversion
-                WHERE fullkey = sqlite_path
-                LIMIT 1
-                
-                UNION ALL
-                
-                SELECT st.id, st.parent, a.depth + 1
-                FROM schema_tree st
-                JOIN ancestors a ON st.id = a.parent
-                WHERE st.parent IS NOT NULL
-            ),
-            closest_anchor AS (
-                SELECT st.parent AS object_id, st.path, a.depth
-                FROM schema_tree st
-                JOIN ancestors a ON st.parent = a.id
-                WHERE st.key = '$dynamicAnchor'
-                AND st.atom = :anchor
-                ORDER BY a.depth ASC
-                LIMIT 1
-            )
-        SELECT json_extract(schema, '$' || substr(path, 2)) AS object
-        FROM closest_anchor
-        UNION ALL
-        SELECT NULL WHERE NOT EXISTS (SELECT 1 FROM closest_anchor);
-    ";
-
-    sqlquery q = SqlPrepareQueryObject(GetModule(), s);
-    SqlBindJson(q, ":schema", joSchema);
-    SqlBindJson(q, ":path", schema_scope_GetLexical());
-    SqlBindString(q, ":anchor", JsonGetString(jsRef));
-
-    return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+    return schema_scope_GetDynamicAnchor(joSchema, JsonGetString(jsRef));
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -2219,6 +2197,10 @@ json schema_core_Validate(json jInstance, json joSchema)
         bDynamicAnchor = TRUE;
     }
 
+    /// @todo
+    ///     [ ] $ref and $dynamicRef should allow for processing adjacent keywords and should
+    ///         combine the results of those keywords with the results of the $ref or $dynamicRef.
+    ///     [ ] Given this, should the $ref and $dynamicRef keywords be moved to the dispatcher?
     json jRef = JsonObjectGet(joSchema, "$ref");
     if (jRef != JSON_NULL)
     {
@@ -2331,9 +2313,6 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     return joResult;
 }
-
-/// @todo the function that calls the validation must call the variable
-///     desctruction method first!
 
 // Registers (validates and saves) a schema (joSchema).
 // If a schema with the same $id exists, it is overwritten.
