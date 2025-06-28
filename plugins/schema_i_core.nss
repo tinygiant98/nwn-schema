@@ -10,15 +10,80 @@ int schema_HasKey(json jo, string sKey)
     return (JsonFind(jo, JsonString(sKey)) != JsonNull());
 }
 
-/// @todo reorder all the functions.  We're almost there!
-
-sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE)
+/// @todo
+///     [ ] There are only two "core" functions, schema_core_Validate and _PrepareQuery.  See
+///         about reclassifying other functions as core, or move these functions to other
+///         namespaces, such as _validate_ for _Validate and _reference_ for _PrepareQuery.
+///     [x] Build a schema_admin database to hold all schema-related data, including the
+///         metaschema vocabularies, test objects and other data that might be updated with
+///         new versions but that shouldn't be stored with user data to prevent user data
+///         from being overwritten by schema updates.
+sqlquery schema_core_PrepareQuery(string s, int bForceModule = TRUE, string sDatabase = "schema_data")
 {
     if (bForceModule)
         return SqlPrepareQueryObject(GetModule(), s);
     else
-        return SqlPrepareQueryCampaign("schema_data", s);
+        return SqlPrepareQueryCampaign(sDatabase, s);
 }
+
+sqlquery schema_core_PrepareAdminQuery(string s)
+{
+    return schema_core_PrepareQuery(s, FALSE, "schema_admin");
+}
+
+sqlquery schema_core_PrepareSchemaQuery(string s)
+{
+    return schema_core_PrepareQuery(s, FALSE, "schema_data");
+}
+
+void schema_core_CreateTables()
+{
+    /// @note User Table: schema_schema holds all validated schema provided by user input.
+    ///     schema: the entire validated schema object
+    ///     schema_id: auto-generated id from the schema's $id keyword, used for indexing
+    /// @todo
+    ///     [ ] Modify the table definition for schema_schema to include a resolution for
+    ///         a violation of the unique constraint on schema_id.
+    string s = r"
+        CREATE TABLE IF NOT EXISTS schema_schema (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schema TEXT NOT NULL,
+            schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$id')) STORED,
+            UNIQUE(schema_id)
+        );
+    ";
+    SqlStep(schema_core_PrepareSchemaQuery(s));
+
+    /// @note User Index: schema_index is used to speed up lookups of schema by their $id.
+    s = r"
+        CREATE INDEX IF NOT EXISTS schema_index ON schema_schema (schema_id);
+    ;";
+    SqlStep(schema_core_PrepareSchemaQuery(s));
+
+    /// @todo
+    ///     [ ] Create the administrative tables that hold the metaschema, output schema and
+    ///         other data that is not user-generated but still required to be available to
+    ///         the system.  The data in these tables should be modifiable without causing
+    ///         user-data loss or user-data collisions, and should never cause errors due to
+    ///         modification.
+    
+    /// @note Admin Table: schema_metaschema holds all vocaularies from each schema draft
+    ///     supported by this system.
+    /// @todo
+    ///     [ ] Include a version number for each primary metaschema and its vocaularies so
+    ///         multiple schema drafts can be supportoed (eventually).
+    string s = r"
+        CREATE TABLE IF NOT EXISTS schema_metaschema (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metaschema TEXT NOT NULL,
+            metaschema_id TEXT GENERATED ALWAYS AS (json_extract(metaschema, '$.$id')) STORED,
+            UNIQUE(metaschema_id)
+        );
+
+
+
+}
+
 
 /// -----------------------------------------------------------------------------------------------
 ///                                         SCOPE MANAGEMENT
@@ -82,35 +147,6 @@ json schema_scope_Get(string sScope)
 json schema_scope_GetLexical() {return schema_scope_Get("SCHEMA_SCOPE_LEXICAL");}
 json schema_scope_GetDynamic() {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");}
 
-/// @private Resolve a dynamic anchor subschema from the current dynamic scope.
-/// @param sDynamicAnchor The dynamic anchor to resolve.
-/// @returns The resolved dynamic anchor schema as a json object, or an empty
-///     json object if not found.
-json schema_scope_GetDynamicAnchor(string sDynamicAnchor)
-{
-    json jaDynamic = schema_scope_GetDynamic();
-    if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
-        return JsonObject();
-
-    int nDepth = schema_scope_GetDepth(TRUE);
-    if (nDepth >= JsonGetLength(jaDynamic))
-        return JsonObject();
-
-    json jaSchema = JsonArrayGet(jaDynamic, nDepth);
-    if (JsonGetType(jaSchema) != JSON_TYPE_ARRAY || JsonGetLength(jaSchema) == 0)
-        return JsonObject();
-
-    int i; for (i = 1; i <= JsonGetLength(jaSchema); i++)
-    {
-        json joSchema = JsonArrayGet(jaSchema, i);
-        json jsAnchor = JsonObjectGet(joSchema, "$dynamicAnchor");
-        if (JsonGetType(jsAnchor) == JSON_TYPE_STRING && JsonGetString(jsAnchor) == sDynamicAnchor)
-            return joSchema;
-    }
-
-    return JsonObject();
-}
-
 /// @private Deconstruct a path string into an array of path segments.
 /// @param sPath The path string to deconstruct.
 /// @returns A json array containing the path segments, or an empty json array if the path is empty.
@@ -152,7 +188,7 @@ json schema_scope_Deconstruct(string sPath)
         FROM split_string
         WHERE part != '';
     ";
-    sqlquery q = schema_core_PrepareQuery(s, TRUE);
+    sqlquery q = schema_core_PrepareQuery(s);
     SqlBindString(q, ":path", sPath);
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
@@ -178,7 +214,7 @@ string schema_scope_Construct(json jaPath = JSON_NULL)
             END AS path
         FROM path_elements;
     ";
-    sqlquery q = schema_core_PrepareQuery(s, TRUE);
+    sqlquery q = schema_core_PrepareQuery(s);
     SqlBindJson(q, ":schema_path", jaPath);
 
     return SqlStep(q) ? SqlGetString(q, 0) : "";
@@ -431,7 +467,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
             PRIMARY KEY (verbosity, schema)
         );
     ";
-    SqlStep(schema_core_PrepareQuery(s));
+    SqlStep(schema_core_PrepareAdminQuery(s));
 
     json jFile = JsonParse(ResManGetFileContents(sFile, RESTYPE_TXT));
     s = r"
@@ -441,7 +477,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
             AND schema = :output_schema;
     ";
 
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareAdminQuery(s);
     SqlBindString(q, ":output_verbosity", sVerbosity);
     SqlBindJson(q, ":output_schema", jFile);
 
@@ -553,7 +589,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
             ON CONFLICT(verbosity, schema) DO UPDATE SET
                 output = :output_data;
         ";
-        sqlquery q = schema_core_PrepareQuery(s);
+        sqlquery q = schema_core_PrepareAdminQuery(s);
         SqlBindString(q, ":output_verbosity", sVerbosity);
         SqlBindJson(q, ":output_schema", jFile);
         SqlBindJson(q, ":output_data", jOutput);
@@ -784,28 +820,10 @@ void schema_reference_DeleteSchema(string sID)
     string s = r"
         DELETE FROM schema_schema WHERE schema_id = :schema_id;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareSchemaQuery(s);
     SqlBindString(q, ":schema_id", sID);
 
     SqlStep(q);
-}
-
-void schema_reference_CreateTables()
-{
-    string s = r"
-        CREATE TABLE IF NOT EXISTS schema_schema (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schema TEXT NOT NULL,
-            schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$id')) STORED,
-            UNIQUE(schema_id)
-        );
-    ";
-    SqlStep(schema_core_PrepareQuery(s));
-
-    s = r"
-        CREATE INDEX IF NOT EXISTS schema_index ON schema_schema (schema_id);
-    ;";
-    SqlStep(schema_core_PrepareQuery(s));
 }
 
 void schema_reference_SaveSchema(json joSchema)
@@ -823,14 +841,13 @@ void schema_reference_SaveSchema(json joSchema)
         ON CONFLICT(schema) DO UPDATE SET
             schema = :schema;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareSchemaQuery(s);
     SqlBindJson(q, ":schema", joSchema);
 
     SqlStep(q);
 }
 
-/// @todo this needs to be ResolveRef and ResolveDynamicRef (?)
-json schema_reference_ResolveRefAnchor(json joSchema, string sAnchor)
+json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
 {
     if (JsonGetType(joSchema) != JSON_TYPE_OBJECT || sAnchor == "")
         return JsonNull();
@@ -857,7 +874,7 @@ json schema_reference_ResolveRefAnchor(json joSchema, string sAnchor)
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
 }
 
-json schema_reference_ResolveRefPointer(json joSchema, string sPointer)
+json schema_reference_ResolvePointer(json joSchema, string sPointer)
 {
     string s = r"
         WITH
@@ -878,14 +895,14 @@ json schema_reference_ResolveRefPointer(json joSchema, string sPointer)
         WHERE fullkey = (SELECT path FROM schema_path)
         LIMIT 1;
     ";
-    sqlquery q = schema_core_PrepareQuery(s, TRUE);
+    sqlquery q = schema_core_PrepareQuery(s);
     SqlBindJson(q, ":schema", joSchema);
     SqlBindString(q, ":pointer", sPointer);
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
 }
 
-json schema_reference_ResolveRefFile(string sFile)
+json schema_reference_ResolveFile(string sFile)
 {
     if (ResManGetAliasFor(sFile, RESTYPE_TXT) == "")
         return JsonNull();
@@ -912,23 +929,23 @@ json schema_reference_GetSchema(string sID)
     string s = r"
         SELECT * FROM schema_schema WHERE schema_id = :schema_id;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareSchemaQuery(s);
     SqlBindString(q, ":schema_id", sID);
 
     json joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
     if (JsonGetType(joSchema) == JSON_TYPE_NULL)
-        return schema_reference_ResolveRefFile(sID);
+        return schema_reference_ResolveFile(sID);
     else
         return joSchema;
 }
 
-json schema_reference_ResolveRefFragment(json joSchema, string sFragment)
+json schema_reference_ResolveFragment(json joSchema, string sFragment)
 {
     if (GetStringLeft(sFragment, 1) == "/")
-        return schema_reference_ResolveRefPointer(joSchema, sFragment);
+        return schema_reference_ResolvePointer(joSchema, sFragment);
     else
     {
-        json joAnchor = schema_reference_ResolveRefAnchor(joSchema, sFragment);
+        json joAnchor = schema_reference_ResolveAnchor(joSchema, sFragment);
         if (JsonGetType(joAnchor) == JSON_TYPE_NULL)
             joAnchor = JsonObjectGet(joSchema, sFragment);
 
@@ -977,13 +994,22 @@ int schema_reference_CheckMatch(json jaMatch, json jaCondition)
             END AS result
         FROM pairs;
     ";
-    sqlquery q = schema_core_PrepareQuery(s, TRUE);
+    sqlquery q = schema_core_PrepareQuery(s);
     SqlBindJson(q, ":match", jaMatch);
     SqlBindJson(q, ":condition", jaCondition);
 
     return SqlStep(q) ? SqlGetInt(q, 0) : FALSE;
 }
 
+/// @private Resolve a $ref.  This function follows closesly the uri resolution
+///     algorithm defined in RFC 3986, Section 5.2.  It handles both absolute and
+///     relative references, as well as fragment-only references.  Additionally, it
+///     handles the special case where the absolute uri cannot be determined, so any
+///     path, query or fragment segments can be used to load a stored schema or parse
+///     a json file with the same name.
+/// @param joSchema The base schema to resolve the reference against.
+/// @param jsRef The $ref json object to resolve.
+/// @returns The resolved schema, or the base schema if no resolution is possible.
 json schema_reference_ResolveRef(json joSchema, json jsRef)
 {
     string sRef = JsonGetString(jsRef);
@@ -999,7 +1025,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
     /// @note Handle fragment-only references.  These references
     ///     should exist within the base schema (joSchema).
     if (schema_reference_CheckMatch(jaMatchRef, JsonParse("[-1,0,0,0,0,0,0,0,1,1]")))
-        return schema_reference_ResolveRefFragment(joSchema, JsonGetString(JsonArrayGet(jaMatchRef, 9)));
+        return schema_reference_ResolveFragment(joSchema, JsonGetString(JsonArrayGet(jaMatchRef, 9)));
 
     /// @note A resource's absolute uri is determined by RFC 3896, paragraph 5.1,
     ///     Appendix A (uri grammar), and Appendix B (parsing).  An absolute uri is
@@ -1046,7 +1072,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
     {
         string sFragment = JsonGetString(JsonArrayGet(jaMatchRef, 9));
         if (sFragment != "")
-            return schema_reference_ResolveRefFragment(joSchema, sFragment);
+            return schema_reference_ResolveFragment(joSchema, sFragment);
         else
             return joSchema;
     }
@@ -1082,7 +1108,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
 
             string sFragment = JsonGetString(JsonArrayGet(jaMatchRef, 9));
             if (sFragment != "")
-                return schema_reference_ResolveRefFragment(joSchema, sFragment);
+                return schema_reference_ResolveFragment(joSchema, sFragment);
             else
                 return joSchema;
         }
@@ -1108,7 +1134,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
 
                     string sFragment = JsonGetString(JsonArrayGet(jaMatchRef, 9));
                     if (sFragment != "")
-                        return schema_reference_ResolveRefFragment(joSchema, sFragment);
+                        return schema_reference_ResolveFragment(joSchema, sFragment);
                     else
                         return joSchema;
                 }
@@ -1189,16 +1215,40 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
             if (sFragment == "")
                 return joSchema;
             else
-                return schema_reference_ResolveRefFragment(joSchema, sFragment);
+                return schema_reference_ResolveFragment(joSchema, sFragment);
         }
     }
 
     return JsonNull();
 }
 
+/// @private Resolve a dynamic anchor subschema from the current dynamic scope.
+/// @param jsRef The dynamic anchor to resolve.
+/// @returns The resolved dynamic anchor schema as a json object, or an empty
+///     json object if not found.
 json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 {
-    return schema_scope_GetDynamicAnchor(joSchema, JsonGetString(jsRef));
+    json jaDynamic = schema_scope_GetDynamic();
+    if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
+        return JsonObject();
+
+    int nDepth = schema_scope_GetDepth(TRUE);
+    if (nDepth >= JsonGetLength(jaDynamic))
+        return JsonObject();
+
+    json jaSchema = JsonArrayGet(jaDynamic, nDepth);
+    if (JsonGetType(jaSchema) != JSON_TYPE_ARRAY || JsonGetLength(jaSchema) == 0)
+        return JsonObject();
+
+    int i; for (i = 1; i <= JsonGetLength(jaSchema); i++)
+    {
+        json joSchema = JsonArrayGet(jaSchema, i);
+        json jsAnchor = JsonObjectGet(joSchema, "$dynamicAnchor");
+        if (JsonGetType(jsAnchor) == JSON_TYPE_STRING && jsAnchor == jsRef)
+            return joSchema;
+    }
+
+    return JsonObject();
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -2201,6 +2251,8 @@ json schema_core_Validate(json jInstance, json joSchema)
     ///     [ ] $ref and $dynamicRef should allow for processing adjacent keywords and should
     ///         combine the results of those keywords with the results of the $ref or $dynamicRef.
     ///     [ ] Given this, should the $ref and $dynamicRef keywords be moved to the dispatcher?
+    ///     [ ] Need to complete a method to integrate teh results of $ref and $dynamicRef into
+    ///         the current output unit.
     json jRef = JsonObjectGet(joSchema, "$ref");
     if (jRef != JSON_NULL)
     {
@@ -2363,7 +2415,7 @@ int ValidateInstanceAdHoc(json jInstance, json joSchema) {
     // TODO: If $id is present, optionally register
     // TODO: Validate jInstance using schema_core_Validate
     
-    schema_reference_CreateTables();
+    schema_core_CreateTables();
     schema_scope_Destroy();
 
     json joOutputUnit = schema_core_Validate(jInstance, joSchema);
