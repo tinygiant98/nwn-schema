@@ -93,24 +93,33 @@ void schema_core_CreateTables()
 ///                                         SCOPE MANAGEMENT
 /// -----------------------------------------------------------------------------------------------
 
+/// @brief Scope management is accomplished via local variables set on the module object.  Scope
+///     arrays track the various data required for each validation recursion, including the ability
+///     track unique data for concurrent validation attempts.  Scope arrays are simulated-base-1, in
+///     that the first array entry is an empty json value.
+///
+///        The depth value is used to track the concurrent validation attempts, which occur when
+///     the system finds a valid schema in a location that cannot be consider validated, such as from
+///     a file.  If the desired schema is found in a file, the system will attempt to validate the
+///     provided schema before continuing with the instance validation.
+
 /// @private Destroy all scope-associated local variables to ensure scope data from multiple
 ///     validations attempts does not collide.
 void schema_scope_Destroy()
 {
-    json jaScopes = r"[
+    json jaArrays = r"[
         ""SCHEMA_SCOPE_LEXICAL"",
         ""SCHEMA_SCOPE_DYNAMIC"",
-        ""SCHEMA_SCOPE_VERSION""
+        ""SCHEMA_SCOPE_SCHEMA""
     ]";
 
     DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
-    int i; for (; i < JsonGetLength(jaScopes); i++)
-        DelayCommand(0.1, DeleteLocalJson(GetModule(), JsonGetString(JsonArrayGet(jaScopes, i))));
+    int i; for (; i < JsonGetLength(jaArrays); i++)
+        DelayCommand(0.1, DeleteLocalJson(GetModule(), JsonGetString(JsonArrayGet(jaArrays, i))));
 }
 
-/// @todo
-///     [ ] Move array management into its own function.  schema_scope_ResizeArrays or similar
-
+/// @private Resize scope arrays to match the current scope depth.  If the array must grow,
+///     new members are initialized to the default values in joScopes.
 void schema_scope_ResizeArrays()
 {
     int nRequiredLength = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH") + 1;
@@ -118,7 +127,7 @@ void schema_scope_ResizeArrays()
     json joScopes = r"{
         ""SCHEMA_SCOPE_LEXICAL"": [],
         ""SCHEMA_SCOPE_DYNAMIC"": [],
-        ""SCHEMA_SCOPE_VERSION"": """"
+        ""SCHEMA_SCOPE_SCHEMA"": """"
     }";
 
     json jaScopes = JsonObjectKeys(joScopes);
@@ -182,24 +191,24 @@ json schema_scope_Get(string sScope)
 json schema_scope_GetLexical() {return schema_scope_Get("SCHEMA_SCOPE_LEXICAL");}
 json schema_scope_GetDynamic() {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");}
 
-/// @private Deconstruct a path string into an array of path segments.
-/// @param sPath The path string to deconstruct.
+/// @private Deconstruct a pointer string into an array of pointer segments.
+/// @param sPath The pointer string to deconstruct.
 /// @returns A json array containing the path segments, or an empty json array if the path is empty.
-json schema_scope_Deconstruct(string sPath)
+json schema_scope_Deconstruct(string sPointer)
 {
     string s = r"
         WITH RECURSIVE split_string(input_string, part, rest) AS (
             SELECT 
-                TRIM(:path, '/'), 
+                TRIM(:pointer, '/'), 
                 CASE 
-                    WHEN INSTR(TRIM(:path, '/'), '/') = 0 
-                        THEN TRIM(:path, '/')
-                    ELSE SUBSTR(TRIM(:path, '/'), 1, INSTR(TRIM(:path, '/'), '/') - 1)
+                    WHEN INSTR(TRIM(:pointer, '/'), '/') = 0 
+                        THEN TRIM(:pointer, '/')
+                    ELSE SUBSTR(TRIM(:pointer, '/'), 1, INSTR(TRIM(:pointer, '/'), '/') - 1)
                 END,
                 CASE 
-                    WHEN INSTR(TRIM(:path, '/'), '/') = 0 
+                    WHEN INSTR(TRIM(:pointer, '/'), '/') = 0 
                         THEN ''
-                    ELSE SUBSTR(TRIM(:path, '/'), INSTR(TRIM(:path, '/'), '/') + 1)
+                    ELSE SUBSTR(TRIM(:pointer, '/'), INSTR(TRIM(:pointer, '/'), '/') + 1)
                 END
             
             UNION ALL
@@ -219,28 +228,28 @@ json schema_scope_Deconstruct(string sPath)
             FROM split_string
             WHERE rest != ''
         )
-        SELECT json_group_array(part) AS path_array
+        SELECT json_group_array(part)
         FROM split_string
         WHERE part != '';
     ";
     sqlquery q = schema_core_PrepareQuery(s);
-    SqlBindString(q, ":path", sPath);
+    SqlBindString(q, ":pointer", sPointer);
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
 }
 
 /// @private Construct a pointer string from a json array of pointer segments.
-/// @param jaPath The json array containing the pointer segments.
+/// @param jaPointer The json array containing the pointer segments.
 /// @returns A string representing the pointer, or an empty string if the input is null or empty.
-string schema_scope_Construct(json jaPath = JSON_NULL)
+string schema_scope_Construct(json jaPointer = JSON_NULL)
 {
-    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY || JsonGetLength(jaPath) == 0)
+    if (JsonGetType(jaPointer) != JSON_TYPE_ARRAY || JsonGetLength(jaPointer) == 0)
         return "";
 
     string s = r"
         WITH path_elements AS (
             SELECT value
-            FROM json_each(:schema_path)
+            FROM json_each(:pointer)
         )
         SELECT 
             CASE 
@@ -250,7 +259,7 @@ string schema_scope_Construct(json jaPath = JSON_NULL)
         FROM path_elements;
     ";
     sqlquery q = schema_core_PrepareQuery(s);
-    SqlBindJson(q, ":schema_path", jaPath);
+    SqlBindJson(q, ":pointer", jaPointer);
 
     return SqlStep(q) ? SqlGetString(q, 0) : "";
 }
@@ -293,9 +302,9 @@ void schema_scope_PushItem(string sScope, json jItem)
 }
 
 /// @private Convenience function to modify scope arrays.
-void schema_scope_PushLexical(string sPath)    {schema_scope_PushArrayItem("SCHEMA_SCOPE_LEXICAL", JsonString(sPath));}
-void schema_scope_PushDynamic(json joScope)    {schema_scope_PushArrayItem("SCHEMA_SCOPE_DYNAMIC", joScope);}
-void schema_scope_PushVersion(string sVersion) {schema_scope_PushItem("SCHEMA_SCOPE_VERSION", JsonString(sVersion));}
+void schema_scope_PushLexical(string sPath)  {schema_scope_PushArrayItem("SCHEMA_SCOPE_LEXICAL", JsonString(sPath));}
+void schema_scope_PushDynamic(json joScope)  {schema_scope_PushArrayItem("SCHEMA_SCOPE_DYNAMIC", joScope);}
+void schema_scope_PushSchema(string sSchema) {schema_scope_PushItem("SCHEMA_SCOPE_SCHEMA", JsonString(sSchema));}
 
 /// @brief Pop the last path from the path array.
 /// @param sScope Scope type SCHEMA_SCOPE_*
@@ -318,7 +327,7 @@ void schema_scope_Pop(string sScope)
 /// @private Convenience functions to pop the member from scope arrays.
 void schema_scope_PopLexical() {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
 void schema_scope_PopDynamic() {schema_scope_Pop("SCHEMA_SCOPE_DYNAMIC");}
-void schema_scope_PopVersion() {schema_scope_Pop("SCHEMA_SCORE_VERSION");}
+void schema_scope_PopSchema()  {schema_scope_Pop("SCHEMA_SCOPE_SCHEMA");}
 
 /// @private Increment the current scope depth by 1 and modify the lexical and dynamic scope
 ///     arrays to handle the additional depth.
