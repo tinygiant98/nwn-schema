@@ -42,17 +42,21 @@ void schema_core_CreateTables()
     ///     schema: the entire validated schema object
     ///     schema_id: auto-generated id from the schema's $id keyword, used for indexing
     /// @todo
-    ///     [ ] Modify the table definition for schema_schema to include a resolution for
+    ///     [x] Modify the table definition for schema_schema to include a resolution for
     ///         a violation of the unique constraint on schema_id.
     string s = r"
         CREATE TABLE IF NOT EXISTS schema_schema (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             schema TEXT NOT NULL,
             schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$id')) STORED,
-            UNIQUE(schema_id)
+            schema_schema TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$schema')) STORED,
+            schema_title TEXT GENERATED ALWAYS AS (json_extract(schema, '$.title')) STORED,
+            schema_description TEXT GENERATED ALWAYS AS (json_extract(schema, '$.description')) STORED,
+            UNIQUE(schema_id) ON CONFLICT REPLACE
         );
     ";
     SqlStep(schema_core_PrepareSchemaQuery(s));
+    SqlStep(schema_core_PrepareAdminQuery(s));
 
     /// @note User Index: schema_index is used to speed up lookups of schema by their $id.
     s = r"
@@ -79,7 +83,7 @@ void schema_core_CreateTables()
             metaschema_id TEXT GENERATED ALWAYS AS (json_extract(metaschema, '$.$id')) STORED,
             UNIQUE(metaschema_id)
         );
-
+    ";
 
 
 }
@@ -93,9 +97,51 @@ void schema_core_CreateTables()
 ///     validations attempts does not collide.
 void schema_scope_Destroy()
 {
+    json jaScopes = r"[
+        ""SCHEMA_SCOPE_LEXICAL"",
+        ""SCHEMA_SCOPE_DYNAMIC"",
+        ""SCHEMA_SCOPE_VERSION""
+    ]";
+
     DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
-    DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL"));
-    DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC"));
+    int i; for (; i < JsonGetLength(jaScopes); i++)
+        DelayCommand(0.1, DeleteLocalJson(GetModule(), JsonGetString(JsonArrayGet(jaScopes, i))));
+}
+
+/// @todo
+///     [ ] Move array management into its own function.  schema_scope_ResizeArrays or similar
+
+void schema_scope_ResizeArrays()
+{
+    int nRequiredLength = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH") + 1;
+
+    json joScopes = r"{
+        ""SCHEMA_SCOPE_LEXICAL"": [],
+        ""SCHEMA_SCOPE_DYNAMIC"": [],
+        ""SCHEMA_SCOPE_VERSION"": """"
+    }";
+
+    json jaScopes = JsonObjectKeys(joScopes);
+    int i; for (; i < JsonGetLength(jaScopes); i++)
+    {
+        string sScope = JsonGetString(JsonArrayGet(jaScopes, i));
+        json joScope = GetLocalJson(GetModule(), sScope);
+        if (JsonGetType(joScope) != JSON_TYPE_ARRAY)
+            joScope = JsonArray();        
+        
+        int nLength = JsonGetLength(joScope);
+        if (nLength == nRequiredLength)
+            continue;
+        else if (nLength > nRequiredLength)
+            joScope = JsonArrayGetRange(joScope, 0, nRequiredLength);
+        else if (nLength < nRequiredLength)
+        {
+            while (JsonGetLength(joScope) < nRequiredLength)
+                joScope = JsonArrayInsert(joScope, JsonObjectGet(joScopes, sScope));
+        }
+
+        SetLocalJson(GetModule(), sScope, joScope);
+    }
 }
 
 /// @private Get the current scope depth.
@@ -103,24 +149,13 @@ void schema_scope_Destroy()
 /// @returns The current scope depth, starting at 1.
 /// @note The first array entry is an empty array. This construct allows for each initialization
 ///     of scope management arrays.
-int schema_scope_GetDepth(int bDepthOnly = FALSE)
+int schema_scope_GetDepth()
 {
     int nDepth = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH");
-    nDepth = nDepth == 0 ? 1 : nDepth;
-
-    if (!bDepthOnly)
+    if (nDepth == 0)
     {
-        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
-        if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
-            jaPaths = JsonArray();
-        
-        if (JsonGetLength(jaPaths) <= nDepth)
-        {
-            while (JsonGetLength(jaPaths) <= nDepth)
-                jaPaths = JsonArrayInsert(jaPaths, JsonArray());
-
-            SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", jaPaths);        
-        }
+        SetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH", ++nDepth);
+        schema_scope_ResizeArrays();
     }
 
     return nDepth;
@@ -194,12 +229,12 @@ json schema_scope_Deconstruct(string sPath)
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
 }
 
-/// @private Construct a path string from a json array of path segments.
-/// @param jaPath The json array containing the path segments.
-/// @returns A string representing the path, or an empty string if the input is null or empty.
+/// @private Construct a pointer string from a json array of pointer segments.
+/// @param jaPath The json array containing the pointer segments.
+/// @returns A string representing the pointer, or an empty string if the input is null or empty.
 string schema_scope_Construct(json jaPath = JSON_NULL)
 {
-    if (JsonGetType(jaPath) == JSON_TYPE_NULL)
+    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY || JsonGetLength(jaPath) == 0)
         return "";
 
     string s = r"
@@ -220,64 +255,50 @@ string schema_scope_Construct(json jaPath = JSON_NULL)
     return SqlStep(q) ? SqlGetString(q, 0) : "";
 }
 
-/// @todo
-///     [ ] This function doesn't appear to make sense in the context of dynamic scopes given
-///         that the dynamic scope array is an array of objects, not an array of strings.
-///         schema_scope_ConstructDynamic should likely be removed.
-
-/// @private Convenience functions to construct arrays for lexical and dynamic scopes.
+/// @private Convenience function to construct pointer from lexical scope members.
 string schema_scope_ConstructLexical() {return schema_scope_Construct(schema_scope_GetLexical());}
-string schema_scope_ConstructDynamic() {return schema_scope_Construct(schema_scope_GetDynamic());}
 
-/// @private Push a path segment into the lexical scope array.
-/// @param sPath A string containing the path segment to push.
-void schema_scope_PushLexical(string sPath)
+/// @private Push a new item into the specified scope array at the current depth.
+/// @param sScope Scope type SCHEMA_SCOPE_*; must be an array of arrays.
+/// @param jItem The json object to push into the array.
+void schema_scope_PushArrayItem(string sScope, json jItem)
 {
     int nDepth = schema_scope_GetDepth();
-    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
+    json jaScopes = GetLocalJson(GetModule(), sScope);
     
-    if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
-        jaPaths = JsonArray();
-    
-    while (JsonGetLength(jaPaths) <= nDepth)
-        jaPaths = JsonArrayInsert(jaPaths, JsonArray());
-    
-    json jaPath = JsonArrayGet(jaPaths, nDepth);
-    
-    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY)
-        jaPath = JsonArray();
-    
-    jaPath = JsonArrayInsert(jaPath, JsonString(sPath));
-    jaPaths = JsonArraySet(jaPaths, nDepth, jaPath);
-    SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", jaPaths);
+    if (JsonGetType(jaScopes) != JSON_TYPE_ARRAY)
+        return;
+
+    json jaScope = JsonArrayGet(jaScopes, nDepth);
+    if (JsonGetType(jaScope) != JSON_TYPE_ARRAY)
+        return;
+
+    jaScope = JsonArrayInsert(jaScope, jItem);
+    jaScopes = JsonArraySet(jaScopes, nDepth, jaScope);
+    SetLocalJson(GetModule(), sScope, jaScopes);
 }
 
-/// @private Push a dynamic scope into the dynamic scope array.
-/// @param jScope A json object representing the dynamic scope to push.
-void schema_scope_PushDynamic(json jScope)
+/// @private Push a new item into the specified scope array at the current depth.
+/// @param sScope Scope type SCHEMA_SCOPE_*; must be a simple array.
+/// @param jItem The json object to push into the array.
+void schema_scope_PushItem(string sScope, json jItem)
 {
-    int nDepth = schema_scope_GetDepth();
-    json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC");
+    json jaScope = GetLocalJson(GetModule(), sScope);
     
-    if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY)
-        jaPaths = JsonArray();
-    
-    while (JsonGetLength(jaPaths) <= nDepth)
-        jaPaths = JsonArrayInsert(jaPaths, JsonArray());
-    
-    json jaPath = JsonArrayGet(jaPaths, nDepth);
-    
-    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY)
-        jaPath = JsonArray();
-    
-    jaPath = JsonArrayInsert(jaPath, jScope);
-    jaPaths = JsonArraySet(jaPaths, nDepth, jaPath);
-    SetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC", jaPaths);
+    if (JsonGetType(jaScope) != JSON_TYPE_ARRAY)
+        return;
+
+    jaScope = JsonArrayInsert(jaScope, jItem);
+    SetLocalJson(GetModule(), sScope, jaScope);
 }
+
+/// @private Convenience function to modify scope arrays.
+void schema_scope_PushLexical(string sPath)    {schema_scope_PushArrayItem("SCHEMA_SCOPE_LEXICAL", JsonString(sPath));}
+void schema_scope_PushDynamic(json joScope)    {schema_scope_PushArrayItem("SCHEMA_SCOPE_DYNAMIC", joScope);}
+void schema_scope_PushVersion(string sVersion) {schema_scope_PushItem("SCHEMA_SCOPE_VERSION", JsonString(sVersion));}
 
 /// @brief Pop the last path from the path array.
-/// @param sScope The scope type, either "SCHEMA_SCOPE_LEXICAL" or "SCHEMA_SCOPE_DYNAMIC".
-/// @returns The last path in the array, or an empty JSON string.
+/// @param sScope Scope type SCHEMA_SCOPE_*
 void schema_scope_Pop(string sScope)
 {
     int nDepth = schema_scope_GetDepth();
@@ -287,42 +308,35 @@ void schema_scope_Pop(string sScope)
         return;
     
     json jaPath = JsonArrayGet(jaPaths, nDepth);
-    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY || JsonGetLength(jaPath) == 0)
+    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY || JsonGetLength(jaPath) <= 2)
         return;
     
     jaPaths = JsonArraySet(jaPaths, nDepth, (JsonGetLength(jaPath) == 1) ? JsonArray() : JsonArrayGetRange(jaPath, 0, -2));
     SetLocalJson(GetModule(), sScope, jaPaths);
 }
 
-/// @private Convenience functions to pop the last path from the lexical and dynamic scope arrays.
+/// @private Convenience functions to pop the member from scope arrays.
 void schema_scope_PopLexical() {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
 void schema_scope_PopDynamic() {schema_scope_Pop("SCHEMA_SCOPE_DYNAMIC");}
+void schema_scope_PopVersion() {schema_scope_Pop("SCHEMA_SCORE_VERSION");}
 
 /// @private Increment the current scope depth by 1 and modify the lexical and dynamic scope
 ///     arrays to handle the additional depth.
 void schema_scope_IncrementDepth()
 {
-    int nDepth = schema_scope_GetDepth(TRUE);
-    SetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH", ++nDepth);
-    schema_scope_GetDepth();
+    SetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH", schema_scope_GetDepth() + 1);
+    schema_scope_ResizeArrays();
 }
 
 /// @private Decrement the current scope depth by 1 and reduce the lexical and dynamic scope
 ///     arrays to match the new depth.  If the depth is already at 1, no changes are made.
 void schema_scope_DecrementDepth()
 {
-    int nDepth = schema_scope_GetDepth(TRUE);
+    int nDepth = schema_scope_GetDepth();
     if (nDepth > 1)
     {
-        json jaPaths = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
-        if (JsonGetType(jaPaths) == JSON_TYPE_ARRAY && JsonGetLength(jaPaths) > nDepth)
-            SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", JsonArrayGetRange(jaPaths, 0, nDepth));
-        
-        json jaPath = GetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC");
-        if (JsonGetType(jaPath) == JSON_TYPE_ARRAY && JsonGetLength(jaPath) > nDepth)
-            SetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC", JsonArrayGetRange(jaPath, 0, nDepth));
-
         SetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH", --nDepth);
+        schema_scope_ResizeArrays();
     }
 }
 
@@ -927,7 +941,10 @@ json schema_reference_ResolveFile(string sFile)
 json schema_reference_GetSchema(string sID)
 {
     string s = r"
-        SELECT * FROM schema_schema WHERE schema_id = :schema_id;
+        SELECT * 
+        FROM schema_schema
+        WHERE schema_id = :schema_id
+            OR schema_id = :schema_id || '#';
     ";
     sqlquery q = schema_core_PrepareSchemaQuery(s);
     SqlBindString(q, ":schema_id", sID);
