@@ -1372,10 +1372,12 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 ///         never be called in the first place.  I think the version guardrails are
 ///         really only needed in functions that have keywords whose validation
 ///         behavior has changed between drafts, like 'items'.
+///     [ ] Test this whole jsAnchor == JsonBool(TRUE) logic.  Might have to be compared
+///         to JsonInt(1) or JsonInt(TRUE) instead.
 
 json schema_reference_ResolveRecursiveRef(json joSchema)
 {
-    if (JsonGetInt(schema_scope_GetSchema() >= SCHEMA_DRAFT_2019_09))
+    if (JsonGetInt(schema_scope_GetSchema()) >= SCHEMA_DRAFT_2019_09)
     {
         json jaDynamic = schema_scope_GetDynamic();
         if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
@@ -1389,7 +1391,7 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
         {
             json joScope = JsonArrayGet(jaSchema, i);
             json jsAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
-            if (JsonGetType(jsAnchor) == JSON_TYPE_BOOLEAN && jsAnchor == JsonBool(TRUE))
+            if (JsonGetType(jsAnchor) == JSON_TYPE_BOOL && jsAnchor == JsonBool(TRUE))
                 return joScope;
         }
 
@@ -2544,7 +2546,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     if (JsonGetType(jRef) != JSON_TYPE_NULL)
     {
         schema_scope_PushLexical("$recursiveRef");
-        joResult = schema_core_Validate(jInstance, schema_reference_ResolveRecursiveRef(joSchema, jRef));
+        joResult = schema_core_Validate(jInstance, schema_reference_ResolveRecursiveRef(joSchema));
         schema_scope_PopLexical();
         return joResult;
     }
