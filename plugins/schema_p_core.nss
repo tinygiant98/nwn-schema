@@ -35,50 +35,10 @@ void schema_OnPlayerChat()
 //    json joResult = schema_core_Validate(jInstance, jSchema);
 //    Debug("Validation Result: " + JsonDump(joResult, 4));
 
-int TEST = 4;
+int TEST = 1;
 
     if (TEST == 0)
-    {
-        json jSchema = JsonParse(r"[
-            ""object"",
-            ""array"",
-            ""string"",
-            ""number"",
-            ""integer"",
-            ""boolean"",
-            ""null""
-        ]");
-
-        json jInstance = JsonString("test_string");
-        json joResult = schema_validate_Type(jInstance, jSchema);
-
-        Debug("Type Validation Result: " + JsonDump(joResult, 4));
-    }
-    else if (TEST == 1)
-    {
-        string r = "^([^#]*)(?:#(.*))?$";
-        string s = "#fragment";
-        string t = "uri#fragment";
-
-        json jMatch = RegExpMatch(r, s);
-        Debug("Match s = " + JsonDump(jMatch));
-        jMatch = RegExpMatch(r, t);
-        Debug("Match t = " + JsonDump(jMatch));
-    }
-    else if (TEST == 2)
-    {
-        json a = JsonParse("[0, 1]");
-        json b = JsonArrayGetRange(a, 0, -2);
-        Debug("Cut Down Array: " + JsonDump(b));
-
-        json c = JsonParse("[0]");
-        json d = JsonArrayGetRange(c, 0, -2);
-        Debug("Cut Down Single Element Array: " + JsonDump(d));
-    }
-    else if (TEST = 4)
         ExecuteScript("schema_t_core");
-
-
 
 }
 

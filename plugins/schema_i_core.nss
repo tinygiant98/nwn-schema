@@ -1,6 +1,15 @@
 
 #include "util_i_debug"
 
+const int SCHEMA_DRAFT_4 = 0x01;
+const int SCHEMA_DRAFT_6 = 0x02;
+const int SCHEMA_DRAFT_7 = 0x04;
+const int SCHEMA_DRAFT_2019_09 = 0x08;
+const int SCHEMA_DRAFT_2020_12 = 0x10;
+const int SCHEMA_DRAFT_LATEST = SCHEMA_DRAFT_2020_12;
+
+const string SCHEMA_DEFAULT_META = "https://json-schema.org/draft/2020-12/schema";
+
 json schema_core_Validate(json jInstance, json joSchema);
 
 /// @todo get rid of this one?
@@ -89,11 +98,11 @@ void schema_core_CreateTables()
 ///     validations attempts does not collide.
 void schema_scope_Destroy()
 {
-    json jaArrays = r"[
+    json jaArrays = JsonParse(r"[
         ""SCHEMA_SCOPE_LEXICAL"",
         ""SCHEMA_SCOPE_DYNAMIC"",
         ""SCHEMA_SCOPE_SCHEMA""
-    ]";
+    ]");
 
     DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
     int i; for (; i < JsonGetLength(jaArrays); i++)
@@ -106,11 +115,11 @@ void schema_scope_ResizeArrays()
 {
     int nRequiredLength = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH") + 1;
 
-    json joScopes = r"{
+    json joScopes = JsonParse(r"{
         ""SCHEMA_SCOPE_LEXICAL"": [],
         ""SCHEMA_SCOPE_DYNAMIC"": [],
         ""SCHEMA_SCOPE_SCHEMA"": """"
-    }";
+    }");
 
     json jaScopes = JsonObjectKeys(joScopes);
     int i; for (; i < JsonGetLength(jaScopes); i++)
@@ -171,7 +180,7 @@ json schema_scope_GetDynamic() {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");
 json schema_scope_GetSchema()  {return schema_scope_Get("SCHEMA_SCOPE_SCHEMA");}
 
 /// @private Deconstruct a pointer string into an array of pointer segments.
-/// @param sPath The pointer string to deconstruct.
+/// @param sPointer The pointer string to deconstruct.
 /// @returns A json array containing the path segments, or an empty json array if the path is empty.
 json schema_scope_Deconstruct(string sPointer)
 {
@@ -291,11 +300,11 @@ void schema_scope_PushSchema(string sSchema)
 {
     json jSchema;
     if (sSchema == "http://json-schema.org/draft-04/schema#")
-        jSchema = JsonInt(SCHEMA_DRAFT_04);
+        jSchema = JsonInt(SCHEMA_DRAFT_4);
     else if (sSchema == "http://json-schema.org/draft-06/schema#")
-        jSchema = JsonInt(SCHEMA_DRAFT_06);
+        jSchema = JsonInt(SCHEMA_DRAFT_6);
     else if (sSchema == "http://json-schema.org/draft-07/schema#")
-        jSchema = JsonInt(SCHEMA_DRAFT_07);
+        jSchema = JsonInt(SCHEMA_DRAFT_7);
     else if (sSchema == "https://json-schema.org/draft/2019-09/schema")
         jSchema = JsonInt(SCHEMA_DRAFT_2019_09);
     else if (sSchema == "https://json-schema.org/draft/2020-12/schema")
@@ -965,37 +974,9 @@ json schema_reference_ResolvePointer(json joSchema, string sPointer)
 
 /// @todo
 ///     [ ] Track where these JsonNull() get returns and figure out what to do with them.
-///     [ ] Define SCHEMA_DEFAULT_META as a constant for the default metaschema.
+///     [x] Define SCHEMA_DEFAULT_META as a constant for the default metaschema.
 ///     [ ] Add an annotation here if $schema = "" or could not be found in db.
-///     [ ] What do we do here if the file-based schema is not valid?
-
-json schema_reference_ResolveFile(string sFile)
-{
-    if (ResManGetAliasFor(sFile, RESTYPE_TXT) == "")
-        return JsonNull();
-
-    json joSchema = JsonParse(ResManGetFileContents(sFile, RESTYPE_TXT));
-    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT)
-        return JsonNull();
-
-    string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
-    json joMeta = schema_reference_GetSchema(sSchema);
-    if (JsonGetType(joMeta) == JSON_TYPE_NULL)
-        joMeta = schema_reference_GetSchema(SCHEMA_DEFAULT_META);
-
-    schema_scope_IncrementDepth();
-    json joResult = schema_core_Validate(joSchema, joMeta);
-    schema_scope_DecrementDepth();
-
-    if (schema_output_GetValid(joResult))
-        schema_reference_SaveSchema(joSchema);
-    else
-        return JsonNull();
-
-    return joSchema;
-}
-
-/// @todo
+///     [x] What do we do here if the file-based schema is not valid?
 ///     [ ] Need better error handling/messaging here.  Structured logging?
 ///     [ ] Ensure $dynamicReference acts like $ref if the $dynamicAnchor can't be located.
 
@@ -1004,6 +985,7 @@ json schema_reference_GetSchema(string sID)
     if (sID == "")
         return JsonNull();
 
+    /// @note Attempt to retrieve the schema from the user table.
     string s = r"
         SELECT * 
         FROM schema_schema
@@ -1014,17 +996,53 @@ json schema_reference_GetSchema(string sID)
     SqlBindString(q, ":id", sID);
 
     json joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
-    if (JsonGetType(joSchema) == JSON_TYPE_NULL)
-    {
-        q = schema_core_PrepareAdminQuery(s);
-        SqlBindString(q, ":id", sID);
+    if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
+        return joSchema;
 
-        joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
-        if (JsonGetType(joSchema) == JSON_TYPE_NULL)
-            return schema_reference_ResolveFile(sID);
-        else
-            return joSchema;
+    /// @note Attempt to retrieve the schema from the admin table.
+    q = schema_core_PrepareAdminQuery(s);
+    SqlBindString(q, ":id", sID);
+
+    joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+    if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
+        return joSchema;
+
+    /// @note Attempt to retrieve the schema from a ResMan file.
+    if (GetStringLength(sID) <= 16 && ResManGetAliasFor(sID, RESTYPE_TXT) != "")
+    {
+        joSchema = JsonParse(ResManGetFileContents(sID, RESTYPE_TXT));
+        if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
+        {
+            /// @note File-sourced schema are not trusted, so validation must
+            ///     be performed before saving the schema to the database.
+            string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
+            if (sSchema == "")
+                sSchema = SCHEMA_DEFAULT_META;
+
+            json joMeta = schema_reference_GetSchema(sSchema);
+            if (JsonGetType(joMeta) == JSON_TYPE_NULL && sSchema != SCHEMA_DEFAULT_META)
+                joMeta = schema_reference_GetSchema(SCHEMA_DEFAULT_META);
+
+            if (JsonGetType(joMeta) == JSON_TYPE_NULL)
+                return JsonNull();
+            else
+            {
+                schema_scope_IncrementDepth();
+                json joResult = schema_core_Validate(joSchema, joMeta);
+                schema_scope_DecrementDepth();
+
+                if (schema_output_GetValid(joResult))
+                {
+                    schema_reference_SaveSchema(joSchema);
+                    return joSchema;
+                }
+                else
+                    return JsonNull();
+            }
+        }
     }
+
+    return JsonNull();
 }
 
 /// @private Resolve a fragment reference within a $ref.
@@ -1317,6 +1335,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
 
 /// @todo
 ///     [ ] See who is receiving the JsonNull() and handle it.
+///     [ ] Do we need version guardrails here?  Maybe not, but for consistency?
 
 /// @private Resolve a dynamic anchor subschema from the current dynamic scope.
 /// @param jsRef The dynamic anchor to resolve.
@@ -1334,15 +1353,52 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 
     int i; for (i = JsonGetLength(jaSchema); i >= 1; i--)
     {
-        json joSchema = JsonArrayGet(jaSchema, i);
-        json jsAnchor = JsonObjectGet(joSchema, "$dynamicAnchor");
+        json joScope = JsonArrayGet(jaSchema, i);
+        json jsAnchor = JsonObjectGet(joScope, "$dynamicAnchor");
         if (JsonGetType(jsAnchor) == JSON_TYPE_STRING && jsAnchor == jsRef)
-            return joSchema;
+            return joScope;
     }
 
     /// @note If the $dynamicAnchor is not found in the current dynamic scope,
-    ///     the $dynamicRef is treates as a $ref.
+    ///     the $dynamicRef is treated as a $ref.
     return schema_reference_ResolveRef(joSchema, jsRef);
+}
+
+/// @ todo
+///     [x] Convert this function to search for the value in the json_tree where
+///         the fullkey matches the current lexical pointer and $recursiveAnchor = true
+///     [ ] Do we even need these version safeguards?  If the user is using a draft
+///         schema that doesn't support $recursiveAnchor, then this function should
+///         never be called in the first place.  I think the version guardrails are
+///         really only needed in functions that have keywords whose validation
+///         behavior has changed between drafts, like 'items'.
+
+json schema_reference_ResolveRecursiveRef(json joSchema)
+{
+    if (JsonGetInt(schema_scope_GetSchema() >= SCHEMA_DRAFT_2019_09))
+    {
+        json jaDynamic = schema_scope_GetDynamic();
+        if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
+            return JsonNull();
+
+        json jaSchema = JsonArrayGet(jaDynamic, schema_scope_GetDepth());
+        if (JsonGetType(jaSchema) != JSON_TYPE_OBJECT || JsonGetLength(jaSchema) == 0)
+            return JsonNull();
+
+        int i; for (i = 1; i <= JsonGetLength(jaSchema); i++)
+        {
+            json joScope = JsonArrayGet(jaSchema, i);
+            json jsAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
+            if (JsonGetType(jsAnchor) == JSON_TYPE_BOOLEAN && jsAnchor == JsonBool(TRUE))
+                return joScope;
+        }
+
+        /// @note If the $recursiveAnchor is not found in the current dynamic scope,
+        ///     the $recursiveRef is treated as "$ref": "#".
+        return schema_reference_ResolveRef(joSchema, JsonString("#"));
+    }
+
+    return JsonNull();
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -1390,12 +1446,7 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 ///     [ ] How do we handle an nDraft = 0 (i.e. the current schema is a string, not a json-schema.org draft)?
 ///         if nDraft = 0, then it's not a draft schema, so we shouldn't be here anyway?
 
-const int SCHEMA_DRAFT_4 = 0x01;
-const int SCHEMA_DRAFT_6 = 0x02;
-const int SCHEMA_DRAFT_7 = 0x04;
-const int SCHEMA_DRAFT_2019_09 = 0x08;
-const int SCHEMA_DRAFT_2020_12 = 0x10;
-const int SCHEMA_DRAFT_LATEST = SCHEMA_DRAFT_2020_12;
+
 
 /// @brief Validates the global "type" keyword.
 /// @param jInstance The instance to validate.
@@ -1813,6 +1864,7 @@ json schema_validate_UniqueItems(json jInstance, json jUniqueItems)
 
 /// @todo
 ///     [ ] Change joItems to jItems since it can support old drafts that aren't objects?
+///     [ ] I hate the way this (and the object validation) function is written.  Refactor both.
 
 /// @brief Validates interdependent array keywords "prefixItems", "items", "contains",
 ///     "minContains", "maxContains", "unevaluatedItems".
@@ -1891,7 +1943,7 @@ json schema_validate_Array(
     ///     [ ] This boolean loop likely doesn't update the locations in each annotation/error? If not,
     ///         ensure it does.
 
-    if (nDraft >= SCHEMA_DRAFT_2019_09 && JsonGetType(joItems) == JSON_TYPE_BOOLEAN)
+    if (nDraft >= SCHEMA_DRAFT_2019_09 && JsonGetType(joItems) == JSON_TYPE_BOOL)
     {
         int i; for (i = nPrefixItemsLength; i < nInstanceLength; i++)
         {
@@ -1899,6 +1951,8 @@ json schema_validate_Array(
                 joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, "items", joItems);
             else
                 joOutputUnit = schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<validate_items>"));
+
+            jaEvaluatedIndices = JsonArrayInsert(jaEvaluatedIndices, JsonInt(i));
         }
     }
     else
@@ -1976,7 +2030,11 @@ json schema_validate_Array(
     // unevaluatedItems
     if (nDraft <= SCHEMA_DRAFT_7 && JsonGetType(joItems) == JSON_TYPE_ARRAY)
     {
-        /// additinoalitems
+        /// @todo
+        ///     [ ] loop all remaining unevaluated items and:
+        ///         if additionalItems is a schema, validate against the schema;
+        ///         if additionalItems is a boolean, validate against the boolean;
+        ///         if additionalItems is null, assume it's the same as boolean true.
     }
     else if (nDraft >= SCHEMA_DRAFT_2019_09)
     {
@@ -2227,7 +2285,7 @@ json schema_validate_Object(
     }
 
     // 4. dependentSchemas
-    if (nDraft >= SCHEMA_DRAFT_2019)
+    if (nDraft >= SCHEMA_DRAFT_2019_09)
     {
         if (JsonGetType(joDependentSchemas) == JSON_TYPE_OBJECT)
         {
@@ -2271,7 +2329,7 @@ json schema_validate_Object(
     }
 
     // 6. unevaluatedProperties
-    if (nDraft >= SCHEMA_DRAFT_2019)
+    if (nDraft >= SCHEMA_DRAFT_2019_09)
     {
         if (JsonGetType(joUnevaluatedProperties) == JSON_TYPE_OBJECT || JsonGetType(joUnevaluatedProperties) == JSON_TYPE_BOOL)
         {
@@ -2449,7 +2507,8 @@ json schema_core_Validate(json jInstance, json joSchema)
     json jaSchemaKeys = JsonObjectKeys(joSchema);
     
     int bDynamicAnchor = FALSE;
-    if (JsonFind(jaSchemaKeys, JsonString("$dynamicAnchor")) != JsonNull())
+    if (JsonFind(jaSchemaKeys, JsonString("$dynamicAnchor")) != JsonNull() ||
+        JsonFind(jaSchemaKeys, JsonString("$recursiveAnchor")) != JsonNull())
     {
         schema_scope_PushDynamic(joSchema);
         bDynamicAnchor = TRUE;
@@ -2461,6 +2520,8 @@ json schema_core_Validate(json jInstance, json joSchema)
     ///     [ ] Given this, should the $ref and $dynamicRef keywords be moved to the dispatcher?
     ///     [ ] Need to complete a method to integrate teh results of $ref and $dynamicRef into
     ///         the current output unit.
+    ///     [ ] These resolution functions can and will return JsonNull().  Check for that before
+    ///         invoking another validation process.
     json jRef = JsonObjectGet(joSchema, "$ref");
     if (jRef != JSON_NULL)
     {
@@ -2475,6 +2536,15 @@ json schema_core_Validate(json jInstance, json joSchema)
     {
         schema_scope_PushLexical("$dynamicRef");
         joResult = schema_core_Validate(jInstance, schema_reference_ResolveDynamicRef(joSchema, jRef));
+        schema_scope_PopLexical();
+        return joResult;
+    }
+
+    jRef = JsonObjectGet(joSchema, "$recursiveRef");
+    if (JsonGetType(jRef) != JSON_TYPE_NULL)
+    {
+        schema_scope_PushLexical("$recursiveRef");
+        joResult = schema_core_Validate(jInstance, schema_reference_ResolveRecursiveRef(joSchema, jRef));
         schema_scope_PopLexical();
         return joResult;
     }
@@ -2656,4 +2726,3 @@ int ValidateInstanceAdHoc(json jInstance, json joSchema) {
     - call for schema validation
     - save the schema is valid and an id exists
 */
-
