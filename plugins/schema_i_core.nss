@@ -20,14 +20,6 @@ const string SCHEMA_DB_USER = "schema_user";
 json schema_core_Validate(json jInstance, json joSchema);
 json schema_reference_GetSchema(string sSchemaID);
 
-/// @todo
-///     [ ] get rid of this one?
-int schema_HasKey(json jo, string sKey)
-{
-    // Returns TRUE if the object has the specified key, FALSE otherwise
-    return (JsonFind(jo, JsonString(sKey)) != JsonNull());
-}
-
 /// @private Prepare a query for any schema-related database or for module use.
 /// @param s The query string to prepare.
 /// @param bForceModule If TRUE, the query is prepared for the module database.
@@ -500,6 +492,8 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
 
     if (sSchemaID == "")
         sSchemaID = SCHEMA_DEFAULT_OUTPUT;
+
+    schema_core_CreateTables();
 
     string s = r"
         CREATE TABLE IF NOT EXISTS schema_output (
@@ -987,7 +981,8 @@ json schema_reference_GetSchema(string sSchemaID)
     if (sSchemaID == "")
         return JsonNull();
 
-    /// @note Attempt to retrieve the schema from the user table.
+    schema_core_CreateTables();
+
     string s = r"
         SELECT * 
         FROM schema_schema
@@ -1047,6 +1042,9 @@ json schema_reference_GetSchema(string sSchemaID)
     return JsonNull();
 }
 
+/// @todo
+///     [ ] Is this where we need ~0 and ~1 resolution?
+
 /// @private Resolve a fragment reference within a $ref.
 /// @param joSchema The base schema to resolve the fragment against.
 /// @param sFragment The fragment string to resolve.
@@ -1082,7 +1080,18 @@ string schema_reference_MergePath(json jaMatchBase, string sPathRef)
     }
 }
 
-int schema_reference_CheckMatch(json jaMatch, json jaCritera)
+/// @private Determine is members of jaMatch meet desired existence
+///     criteria defined in jaCriteria.
+/// @param jaMatch Uri-reference match results.
+/// @param jaCriteria Existence criteria array.
+/// @returns TRUE for a successful match, FALSE otherwise.
+/// @note jaCriteria must be an 10-element array containing the integers
+///     -1, 0 or 1.  No other values are valid.  This function will compare
+///     each member in jaMatch to it's matching-index member in jaCriteria.
+///         -1: Value of matching index is ignored
+///          0: Value of matching index must be a zero-length string
+///          1: Value of matching index must be a greater-than-zero-length string
+int schema_reference_CheckMatch(json jaMatch, json jaCriteria)
 {
     string s = r"
         WITH
@@ -1109,7 +1118,7 @@ int schema_reference_CheckMatch(json jaMatch, json jaCritera)
     ";
     sqlquery q = schema_core_PrepareQuery(s);
     SqlBindJson(q, ":match", jaMatch);
-    SqlBindJson(q, ":criteria", jaCritera);
+    SqlBindJson(q, ":criteria", jaCriteria);
 
     return SqlStep(q) ? SqlGetInt(q, 0) : FALSE;
 }
@@ -1117,7 +1126,7 @@ int schema_reference_CheckMatch(json jaMatch, json jaCritera)
 /// @private Resolve a $ref.  This function follows closesly the uri resolution
 ///     algorithm defined in RFC 3986, Section 5.2.  It handles both absolute and
 ///     relative references, as well as fragment-only references.  Additionally, it
-///     handles the special case where the absolute uri cannot be determined, so any
+///     handles a special case where the absolute uri cannot be determined, so any
 ///     path, query or fragment segments can be used to load a stored schema or parse
 ///     a json file with the same name.
 /// @param joSchema The base schema to resolve the reference against.
@@ -1843,79 +1852,7 @@ json schema_validate_Maximum(json jInstance, json jMaximum, json jExclusiveMaxim
     return joOutputUnit;
 }
 
-///// @brief Validates the number "minimum" keyword.
-///// @param jInstance The instance to validate (assumed to be a number).
-///// @param jMinimum The schema value for "minimum" (assumed to be a number).
-///// @returns An output object containing the validation result.
-//json schema_validate_Minimum(json jInstance, json jMinimum)
-//{
-//    json joOutputUnit = schema_output_GetOutputUnit();
-//
-//    int nInstanceType = JsonGetType(jInstance);
-//    if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<instance_number>"));
-//
-//    if (JsonGetFloat(jInstance) < JsonGetFloat(jMinimum))
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<validate_minimum>"));
-//    else
-//        return schema_output_InsertAnnotation(joOutputUnit, "minimum", jMinimum);
-//}
-//
-///// @brief Validates the number "exclusiveMinimum" keyword.
-///// @param jInstance The instance to validate.
-///// @param jExclusiveMinimum The schema value for "exclusiveMinimum".
-///// @returns An output object containing the validation result.
-//json schema_validate_ExclusiveMinimum(json jInstance, json jExclusiveMinimum)
-//{
-//    json joOutputUnit = schema_output_GetOutputUnit();
-//
-//    int nInstanceType = JsonGetType(jInstance);
-//    if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<instance_number>"));
-//
-//    if (JsonGetFloat(jInstance) <= JsonGetFloat(jExclusiveMinimum))
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusiveminimum>"));
-//    else
-//        return schema_output_InsertAnnotation(joOutputUnit, "exclusiveMinimum", jExclusiveMinimum);
-//}
-
-///// @brief Validates the number "maximum" keyword.
-///// @param jInstance The instance to validate.
-///// @param jMaximum The schema value for "maximum".
-///// @returns An output object containing the validation result.
-//json schema_validate_Maximum(json jInstance, json jMaximum)
-//{
-//    json joOutputUnit = schema_output_GetOutputUnit();
-//
-//    int nInstanceType = JsonGetType(jInstance);
-//    if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<instance_number>"));
-//
-//    if (JsonGetFloat(jInstance) > JsonGetFloat(jMaximum))
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<validate_maximum>"));
-//    else
-//        return schema_output_InsertAnnotation(joOutputUnit, "maximum", jMaximum);
-//}
-//
-///// @brief Validates the number "exclusiveMaximum" keyword.
-///// @param jInstance The instance to validate.
-///// @param jExclusiveMaximum The schema value for "exclusiveMaximum".
-///// @returns An output object containing the validation result.
-//json schema_validate_ExclusiveMaximum(json jInstance, json jExclusiveMaximum)
-//{
-//    json joOutputUnit = schema_output_GetOutputUnit();
-//
-//    int nInstanceType = JsonGetType(jInstance);
-//    if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<instance_number>"));
-//
-//    if (JsonGetFloat(jInstance) >= JsonGetFloat(jExclusiveMaximum))
-//        return schema_output_InsertError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusivemaximum>"));
-//    else
-//        return schema_output_InsertAnnotation(joOutputUnit, "exclusiveMaximum", jExclusiveMaximum);
-//}
-
-/// @brief Validates the number "multipleOf" keyword.
+/// @private Validates the number "multipleOf" keyword.
 /// @param jInstance The instance to validate.
 /// @param jMultipleOf The schema value for "multipleOf".
 /// @returns An output object containing the validation result.
@@ -1935,7 +1872,7 @@ json schema_validate_MultipleOf(json jInstance, json jMultipleOf)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_multipleof>"));
 }
 
-/// @brief Validates the array "minItems" keyword.
+/// @private Validates the array "minItems" keyword.
 /// @param jInstance The instance to validate.
 /// @param jiMinItems The schema value for "minItems".
 /// @returns An output object containing the validation result.
@@ -1953,7 +1890,7 @@ json schema_validate_MinItems(json jInstance, json jiMinItems)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_minitems>"));
 }
 
-/// @brief Validates the array "maxItems" keyword.
+/// @private Validates the array "maxItems" keyword.
 /// @param jInstance The instance to validate.
 /// @param jiMaxItems The schema value for "maxItems".
 /// @returns An output object containing the validation result.
@@ -1971,7 +1908,7 @@ json schema_validate_MaxItems(json jInstance, json jiMaxItems)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_maxitems>"));
 }
 
-/// @brief Validates the array "uniqueItems" keyword.
+/// @private Validates the array "uniqueItems" keyword.
 /// @param jInstance The instance to validate.
 /// @param jUniqueItems The schema value for "uniqueItems".
 /// @returns An output object containing the validation result.
@@ -1993,9 +1930,12 @@ json schema_validate_UniqueItems(json jInstance, json jUniqueItems)
 
 /// @todo
 ///     [ ] Change joItems to jItems since it can support old drafts that aren't objects?
-///     [ ] I hate the way this (and the object validation) function is written.  Refactor both.
+///     [ ] Check error message/output unit return during testing.  This might not be the right message
+///         All results of schema_core_Validate will be a full node, so this node object must be inserted
+///         into the parent node for the evaluation?  How ill this output be structured? Maybe an array of
+///         outputs that's parsed when returning to _validate?
 
-/// @brief Validates interdependent array keywords "prefixItems", "items", "contains",
+/// @private Validates interdependent array keywords "prefixItems", "items", "contains",
 ///     "minContains", "maxContains", "unevaluatedItems".
 /// @param jaInstance The array instance to validate.
 /// @param jaPrefixItems The schema value for "prefixItems".
@@ -2026,12 +1966,10 @@ json schema_validate_Array(
     int nInstanceLength = JsonGetLength(jaInstance);
     json jaEvaluatedIndices = JsonArray();
 
-    // prefixItems
-
-    /// @todo
-    ///     [ ] prefixItems is the same as items if it were an array.  So to suport old drafts,
-    ///         if joItems is array, replace jaPrefixItems with joItems, then continue?
-    
+    /// @brief Validate prefixItems keyword.  In earlier drafts, this keyword didn't exist and the behavior was
+    ///     modeled under the items keyword.  In later drafts, items must be an object or boolean.  If items is
+    ///     an array and this validation is using an early draft, assume the items value is intended to module
+    ///     the prefixItems behavior.   
     if (nDraft >= SCHEMA_DRAFT_4 && nDraft <= SCHEMA_DRAFT_7 && JsonGetType(joItems) == JSON_TYPE_ARRAY)
         jaPrefixItems = joItems;
 
@@ -2046,34 +1984,23 @@ json schema_validate_Array(
             json jResult = schema_core_Validate(jItem, joPrefixItem);
 
             if (schema_output_GetValid(jResult))
-            {
-                joOutputUnit = schema_output_InsertChildAnnotation(
-                    joOutputUnit,
-                    "prefixItems",
-                    JsonInt(i)
-                );
-            }
+                joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "prefixItems", JsonInt(i));
             else
-            {
-                joOutputUnit = schema_output_InsertChildError(
-                    joOutputUnit,
-                    JsonGetString(jResult) //, "error")
-                );
-                joOutputUnit = schema_output_SetValid(joOutputUnit, FALSE);
-            }
+                joOutputUnit = schema_output_InsertChildError(joOutputUnit, JsonGetString(jResult));
 
             jaEvaluatedIndices = JsonArrayInsert(jaEvaluatedIndices, JsonInt(i));
         }
+
         joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "prefixItems", jaPrefixItems);
     }
 
-    // items
-    /// @todo
-    ///     [ ] This boolean loop likely doesn't update the locations in each annotation/error? If not,
-    ///         ensure it does.
-
+    /// @brief Validate items keyword.  In later drafts, items can be a boolean (always/never matches) or a
+    ///     schema against which to validate remaining unevaluated array members.  In earlier drafts, it was
+    ///     a single schema to evaluate all array members against or an array of schema which behavior
+    ///     functionally identical to prefixItems above.
     if (nDraft >= SCHEMA_DRAFT_2019_09 && JsonGetType(joItems) == JSON_TYPE_BOOL)
     {
+        /// @brief Support the boolean options in later drafts.
         int i; for (i = nPrefixItemsLength; i < nInstanceLength; i++)
         {
             if (JsonGetInt(joItems) == TRUE)
@@ -2086,45 +2013,38 @@ json schema_validate_Array(
     }
     else
     {
+        /// @brief If items is a single schema, all remaining array members must to be evaluated against this
+        ///     schema.  In earlier drafts, all array members will be evaluated against this schema since
+        ///     prefixItems wasn't a valid keyword.
         if (JsonGetType(joItems) == JSON_TYPE_OBJECT)
         {
             int i; for (i = nPrefixItemsLength; i < nInstanceLength; i++)
             {
                 json jItem = JsonArrayGet(jaInstance, i);
                 json jResult = schema_core_Validate(jItem, joItems);
+                json joChild = schema_output_GetOutputUnit();
 
                 if (schema_output_GetValid(jResult))
-                {
-                    joOutputUnit = schema_output_InsertChildAnnotation(
-                        joOutputUnit,
-                        "items",
-                        JsonInt(i)
-                    );
-                }
+                    joChild = schema_output_InsertChildAnnotation(joChild, "items", JsonInt(i));
                 else
-                {
-                    joOutputUnit = schema_output_InsertChildError(
-                        joOutputUnit,
-                        schema_output_GetErrorMessage("<validate_items>")
-                    );
-                    joOutputUnit = schema_output_SetValid(joOutputUnit, FALSE);
-                }
+                    joChild = schema_output_InsertChildError(joChild, schema_output_GetErrorMessage("<validate_items>"));
 
                 jaEvaluatedIndices = JsonArrayInsert(jaEvaluatedIndices, JsonInt(i));
             }
+
             joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "items", joItems);
         }
     }
 
-    // contains (+minContains, maxContains)
+    /// @brief Validate contains, minContains, maxContains keywords.  minContains and maxContains are only
+    ///     evaluated if contains keyword is present.
     if (nDraft >= SCHEMA_DRAFT_6)
     {
         json jaContainsMatched = JsonArray();
-        int bContainsUsed = JsonGetType(joContains) == JSON_TYPE_OBJECT || JsonGetType(joContains) == JSON_TYPE_BOOL;
-        if (bContainsUsed)
+        if (JsonGetType(joContains) == JSON_TYPE_OBJECT || JsonGetType(joContains) == JSON_TYPE_BOOL)
         {
             int nMatches = 0;
-            int i; for (i = 0; i < nInstanceLength; i++)
+            int i; for (; i < nInstanceLength; i++)
             {
                 json jItem = JsonArrayGet(jaInstance, i);
                 json jResult = schema_core_Validate(jItem, joContains);
@@ -2137,6 +2057,8 @@ json schema_validate_Array(
             int nMin = JsonGetType(jiMinContains) == JSON_TYPE_INTEGER ? JsonGetInt(jiMinContains) : 1;
             int nMax = JsonGetType(jiMaxContains) == JSON_TYPE_INTEGER ? JsonGetInt(jiMaxContains) : 0x7FFFFFFF;
 
+            /// @todo
+            ///     [ ] If both of these are true, the error will be overwritten, fix!
             if (nMatches < nMin)
                 return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_mincontains>"));
             if (nMatches > nMax)
@@ -2156,7 +2078,9 @@ json schema_validate_Array(
         }
     }
 
-    // unevaluatedItems
+    /// @brief Validate unevaluatedItems and additionalItems keywords.  additionalItems is only evaluated if the items
+    ///     keyword is an array; it is ignored if items is not present or if items is a schema.  unevaluatedItems should
+    ///     be validated after all other keywords have been exhausted and unevaluated items remain in the array.
     if (nDraft >= SCHEMA_DRAFT_4 && nDraft <= SCHEMA_DRAFT_7 && JsonGetType(joItems) == JSON_TYPE_ARRAY)
     {
         /// @todo
@@ -2175,30 +2099,18 @@ json schema_validate_Array(
             
             for (i = 0; i < nInstanceLength; i++)
             {
-                /// @todo this fucntion doesn't work.  Do something else.
-                if (!schema_HasKey(joEvalMap, IntToString(i)))
+                if (JsonFind(jaEvaluatedIndices, JsonInt(i)) == JsonNull())
                 {
                     json jItem = JsonArrayGet(jaInstance, i);
                     json jResult = schema_core_Validate(jItem, joUnevaluatedItems);
 
                     if (schema_output_GetValid(jResult))
-                    {
-                        joOutputUnit = schema_output_InsertChildAnnotation(
-                            joOutputUnit,
-                            "unevaluatedItems",
-                            JsonInt(i)
-                        );
-                    }
+                        joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "unevaluatedItems", JsonInt(i));
                     else
-                    {
-                        joOutputUnit = schema_output_InsertChildError(
-                            joOutputUnit,
-                            JsonGetString(jResult) //, "error")
-                        );
-                        joOutputUnit = schema_output_SetValid(joOutputUnit, FALSE);
-                    }
+                        joOutputUnit = schema_output_InsertChildError(joOutputUnit, JsonGetString(jResult));
                 }
             }
+
             joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "unevaluatedItems", joUnevaluatedItems);
         }
     }
@@ -2206,7 +2118,7 @@ json schema_validate_Array(
     return joOutputUnit;
 }
 
-/// @brief Validates the object "required" keyword.
+/// @private Validates the object "required" keyword.
 /// @param joInstance The object instance to validate.
 /// @param jaRequired The schema value for "required".
 /// @returns An output object containing the validation result.
@@ -2221,13 +2133,9 @@ json schema_validate_Required(json joInstance, json jaRequired)
     json jaInstanceKeys = JsonObjectKeys(joInstance);
     int i; for (; i < JsonGetLength(jaRequired); i++)
     {
-        schema_scope_PushLexical(IntToString(i));
-
         json jProperty = JsonArrayGet(jaRequired, i);
         if (JsonFind(jaInstanceKeys, jProperty) == JsonNull())
             jaMissingProperties = JsonArrayInsert(jaMissingProperties, jProperty);
-
-        schema_scope_PopLexical();
     }
 
     if (JsonGetLength(jaMissingProperties) > 0)
@@ -2236,7 +2144,7 @@ json schema_validate_Required(json joInstance, json jaRequired)
         return schema_output_InsertChildAnnotation(joOutputUnit, "required", jaRequired);
 }
 
-/// @brief Validates the object "minProperties" keyword.
+/// @private Validates the object "minProperties" keyword.
 /// @param joInstance The object instance to validate.
 /// @param jiMinProperties The schema value for "minProperties".
 /// @returns An output object containing the validation result.
@@ -2253,7 +2161,7 @@ json schema_validate_MinProperties(json joInstance, json jiMinProperties)
         return schema_output_InsertChildAnnotation(joOutputUnit, "minProperties", jiMinProperties);
 }
 
-/// @brief Validates the object "maxProperties" keyword.
+/// @private Validates the object "maxProperties" keyword.
 /// @param joInstance The object instance to validate.
 /// @param jiMaxProperties The schema value for "maxProperties".
 /// @returns An output object containing the validation result.
@@ -2283,6 +2191,10 @@ json schema_validate_DependentRequired(json joInstance, json joDependentRequired
     
     if (JsonGetType(joInstance) != JSON_TYPE_OBJECT)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<instance_object>"));
+
+    /// @todo
+    ///     [ ] JsonFinds are used incorrectly, must be used against array to find a key.  Check the
+    ///         entire file for this!
 
     json jaPropertyKeys = JsonObjectKeys(joDependentRequired);
     int i; for (; i < JsonGetLength(joDependentRequired); i++)
@@ -2628,6 +2540,13 @@ json schema_validate_Metadata(string sKey, json jValue)
 
 json schema_core_Validate(json jInstance, json joSchema)
 {
+    /// @todo
+    ///     [ ] joSchema could potentially be JsonNull(), handle that!
+    ///     [ ] _validate should always assume it's evaluating an object, so a new output
+    ///         unit is always required for it.  Any output that is the result of _validate
+    ///         that is also inserted into the result should be inserted into a parent array,
+    ///         not a child object.
+
     json joResult = JsonNull();
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -2661,20 +2580,9 @@ json schema_core_Validate(json jInstance, json joSchema)
     }
 
     /// @todo
-    ///     [ ] $ref and $dynamicRef should allow for processing adjacent keywords and should
-    ///         combine the results of those keywords with the results of the $ref or $dynamicRef.
-    ///     [ ] Given this, should the $ref and $dynamicRef keywords be moved to the dispatcher?
-    ///         ... No, behavior is different between drafts -4, -6, -7 ignore sibling, later do not
-    ///             need a conditional return based on draft.
-    ///     [ ] Need to complete a method to integrate teh results of $ref and $dynamicRef into
-    ///         the current output unit.  THis means the annotation and error functions need to be
-    ///         extended; use one set for adding annotations/errors to the current output unit,
-    ///         another for adding the output unit into the parent node's annotations/errors array.
     ///     [ ] These resolution functions can and will return JsonNull().  Check for that before
     ///         invoking another validation process.
     ///     [ ] Need ~1 and ~0 unescaping methodology.  See RFC
-    ///     [ ] Need to check the early returners for the $ref portions and ensure they're not
-    ///         causing problems with popping dynamic scope!
     
     /// @brief Resolve reference, dynamic references and recursive references.  Dynamic and recursive
     ///     references take advantage of dynamic scope to find the appropriate anchor/subschema.  If
@@ -2719,11 +2627,17 @@ json schema_core_Validate(json jInstance, json joSchema)
             else
                 joOutputUnit = schema_output_InsertParentError(joOutputUnit, joResult);
         }
+        else
+        {
+            /// @todo
+            ///     [ ] What do we do with a JsonNull() return from $ref validation?
+        }
 
         if (nDraft >= SCHEMA_DRAFT_4 && nDraft <= SCHEMA_DRAFT_7)
         {
             if (bDynamicAnchor)
                 schema_scope_PopDynamic();
+
             return joOutputUnit;
         }
     }
@@ -2755,7 +2669,8 @@ json schema_core_Validate(json jInstance, json joSchema)
             }
         }
         else if (sKey == "prefixItems" || sKey == "items" || sKey == "contains" ||
-            sKey == "minContains" || sKey == "maxContains" || sKey == "unevaluatedItems")
+            sKey == "minContains" || sKey == "maxContains" || sKey == "unevaluatedItems" ||
+            sKey == "additionalItems")
         {
             if (!(nHandledFlags & HANDLED_ARRAY))
             {
@@ -2942,7 +2857,6 @@ int ValidateInstanceAdHoc(json jInstance, json joSchema) {
 
 /*
     entry points need to:
-    - create the required tables
     - schedule the variable destruction
     - call for schema validation
     - save the schema is valid and an id exists
