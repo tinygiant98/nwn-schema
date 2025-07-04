@@ -13,6 +13,7 @@ const string SCHEMA_DEFAULT_OUTPUT = "https://json-schema.org/draft/2020-12/outp
 
 const string SCHEMA_DB_SYSTEM = "schema_system";
 const string SCHEMA_DB_USER = "schema_user";
+const string SCHEMA_DB_TEST = "schema_test";
 
 /// @todo
 ///     [ ] Is there a way to remove these prototypes so they don't show up in the toolset editor?
@@ -40,6 +41,11 @@ sqlquery schema_core_PrepareSystemQuery(string s)
 sqlquery schema_core_PrepareUserQuery(string s)
 {
     return schema_core_PrepareQuery(s, FALSE, SCHEMA_DB_USER);
+}
+
+sqlquery schema_core_PrepareTestQuery(string s)
+{
+    return schema_core_PrepareQuery(s, FALSE, SCHEMA_DB_TEST);
 }
 
 void schema_core_CreateTables()
@@ -315,15 +321,15 @@ void schema_scope_PushSchema(string sSchema)
 void schema_scope_Pop(string sScope)
 {
     int nDepth = schema_scope_GetDepth();
+
     json jaPaths = GetLocalJson(GetModule(), sScope);
-    
     if (JsonGetType(jaPaths) != JSON_TYPE_ARRAY || JsonGetLength(jaPaths) <= nDepth)
         return;
-    
+
     json jaPath = JsonArrayGet(jaPaths, nDepth);
-    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY || JsonGetLength(jaPath) <= 2)
+    if (JsonGetType(jaPath) != JSON_TYPE_ARRAY)
         return;
-    
+
     jaPaths = JsonArraySet(jaPaths, nDepth, (JsonGetLength(jaPath) == 1) ? JsonArray() : JsonArrayGetRange(jaPath, 0, -2));
     SetLocalJson(GetModule(), sScope, jaPaths);
 }
@@ -1492,9 +1498,13 @@ json schema_validate_Type(json jInstance, json jType)
         }
         else if (JsonGetString(jType) == "integer")
         {
-            float f = JsonGetFloat(jInstance);
-            if (IntToFloat(FloatToInt(f)) == f)
-                return schema_output_InsertChildAnnotation(joOutputUnit, "type", jType);
+            if (nInstanceType == JSON_TYPE_INTEGER || nInstanceType == JSON_TYPE_FLOAT)
+            {
+                float f = JsonGetFloat(jInstance);
+
+                if (IntToFloat(FloatToInt(f)) == f)
+                    return schema_output_InsertChildAnnotation(joOutputUnit, "type", jType);
+            }
         }
         else
         {
@@ -1521,7 +1531,7 @@ json schema_validate_Type(json jInstance, json jType)
 
             json joValidate = schema_validate_Type(jInstance, JsonArrayGet(jType, i));
             if (schema_output_GetValid(joValidate))
-                joOutputUnit = joValidate;
+                joOutputUnit = schema_output_InsertParentAnnotation(joOutputUnit, joValidate);
 
             schema_scope_PopLexical();
         }
@@ -2603,7 +2613,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     
     /// @brief Resolve reference, dynamic references and recursive references.  Dynamic and recursive
     ///     references take advantage of dynamic scope to find the appropriate anchor/subschema.  If
-    ///     dynamic or recursive references cannot be resolve for any reason, they revert to resolving
+    ///     dynamic or recursive references cannot be resolved for any reason, they revert to resolving
     ///     exactly like a normal $ref.
     json jRef = JsonObjectGet(joSchema, "$ref");
     if (JsonGetType(jRef) != JSON_TYPE_NULL)
@@ -2666,8 +2676,6 @@ json schema_core_Validate(json jInstance, json joSchema)
     int HANDLED_MAXIMUM = 0x10;
     int nHandledFlags;
 
-    /// @brief Iterator over all of the keywords present in this node and dispatch values to
-    ///     validation functions.
     int i; for (; i < JsonGetLength(jaSchemaKeys); i++)
     {
         string sKey = JsonGetString(JsonArrayGet(jaSchemaKeys, i));
@@ -2787,6 +2795,8 @@ json schema_core_Validate(json jInstance, json joSchema)
     if (bDynamicAnchor)
         schema_scope_PopDynamic();
 
+    Debug(JsonDump(joResult, 4));
+
     return joResult;
 }
 
@@ -2800,6 +2810,9 @@ json schema_core_Validate(json jInstance, json joSchema)
 ///         [ ] Validate an instance against an adhoc schema
 ///         [ ] List all schema
 ///     [ ] Create schema_core_PrepareEnvironment() for first run.
+///     [ ] If $schema is not included in the schema, we assume latest
+///         draft, but can we allow the user to specify a draft, as a weird
+///         test-case backup backup?
 
 // Registers (validates and saves) a schema (joSchema).
 // If a schema with the same $id exists, it is overwritten.
