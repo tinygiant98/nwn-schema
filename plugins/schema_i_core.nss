@@ -490,8 +490,11 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
     if (sVerbosity == "")
         sVerbosity = SCHEMA_OUTPUT_VERBOSE;
 
+    /// @todo
+    ///     [ ] testing only, revert.
     if (sSchemaID == "")
-        sSchemaID = SCHEMA_DEFAULT_OUTPUT;
+        sSchemaID = "output";
+        //sSchemaID = SCHEMA_DEFAULT_OUTPUT;
 
     schema_core_CreateTables();
 
@@ -500,7 +503,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
             verbosity TEXT NOT NULL,
             schema TEXT NOT NULL,
             output TEXT NOT NULL DEFAULT '{}',
-            schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.id')) STORED,
+            schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$id')) STORED,
             PRIMARY KEY (verbosity, schema) ON CONFLICT REPLACE
         );
     ";
@@ -1010,6 +1013,11 @@ json schema_reference_GetSchema(string sSchemaID)
         joSchema = JsonParse(ResManGetFileContents(sSchemaID, RESTYPE_TXT));
         if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
         {
+            /// @todo
+            ///     [ ] temporery for testing only, remove!
+            if (sSchemaID == "output")
+                return joSchema;
+
             /// @note File-sourced schema are not trusted, so validation must
             ///     be performed before saving the schema to the database.
             string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
@@ -1462,6 +1470,8 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
 ///         [ ] Schedule build variables for destruction
 ///         [ ] create database tables if they don't exist
 
+///     [ ] for types, how to distinguish between a boolean and in integer since they're saved as 1?
+
 
 /// @brief Validates the global "type" keyword.
 /// @param jInstance The instance to validate.
@@ -1478,6 +1488,12 @@ json schema_validate_Type(json jInstance, json jType)
         if (JsonGetString(jType) == "number")
         {
             if (nInstanceType == JSON_TYPE_INTEGER || nInstanceType == JSON_TYPE_FLOAT)
+                return schema_output_InsertChildAnnotation(joOutputUnit, "type", jType);
+        }
+        else if (JsonGetString(jType) == "integer")
+        {
+            float f = JsonGetFloat(jInstance);
+            if (IntToFloat(FloatToInt(f)) == f)
                 return schema_output_InsertChildAnnotation(joOutputUnit, "type", jType);
         }
         else
@@ -1566,15 +1582,16 @@ json schema_validate_Const(json jInstance, json jConst)
 }
 
 /// @brief Validates the string "minLength" keyword.
-/// @param jsInstance The instance to validate (assumed to be a string).
-/// @param jMinLength The schema value for "minLength" (assumed to be a non-negative integer).
+/// @param jsInstance The instance to validate.
+/// @param jMinLength The schema value for "minLength".
 /// @returns An output object containing the validation result.
 json schema_validate_MinLength(json jsInstance, json jMinLength)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
-    
+
+    /// @note Test Suite: Non-strings should be ignored.
     if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
-        return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<instance_string>"));
+        return schema_output_InsertChildAnnotation(joOutputUnit, "minLength", jMinLength);
 
     float fMinLength = JsonGetFloat(jMinLength);
     if (GetStringLength(JsonGetString(jsInstance)) * 1.0 >= fMinLength)
@@ -1584,7 +1601,7 @@ json schema_validate_MinLength(json jsInstance, json jMinLength)
 }
 
 /// @brief Validates the string "maxLength" keyword.
-/// @param jsInstance The instance to validate (assumed to be a string).
+/// @param jsInstance The instance to validate.
 /// @param jiMaxLength The schema value for "maxLength" (assumed to be a non-negative integer).
 /// @returns An output object containing the validation result.
 json schema_validate_MaxLength(json jsInstance, json jiMaxLength)
