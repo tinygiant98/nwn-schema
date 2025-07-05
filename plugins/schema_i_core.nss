@@ -16,6 +16,16 @@ const string SCHEMA_DB_USER = "schema_user";
 const string SCHEMA_DB_TEST = "schema_test";
 
 /// @todo
+///     [ ] What do I do with this?  Numbering/nDraft without using constants?  Default (last)?
+json jaMetaSchemas = JsonParse(r"[
+    ""http://json-schema.org/draft-04/schema#"",
+    ""http://json-schema.org/draft-06/schema#"",
+    ""http://json-schema.org/draft-07/schema#"",
+    ""https://json-schema.org/draft/2019-09/schema"",
+    ""https://json-schema.org/draft/2020-12/schema""
+];");
+
+/// @todo
 ///     [ ] Is there a way to remove these prototypes so they don't show up in the toolset editor?
 ///         [ ] schema_reference_ -> schema_core_ ? since it's used in a lot of places?
 json schema_core_Validate(json jInstance, json joSchema);
@@ -101,6 +111,7 @@ void schema_scope_Destroy()
         ""SCHEMA_SCOPE_SCHEMA""
     ]");
 
+    DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_VALIDATION_RESULT"));
     DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
     int i; for (; i < JsonGetLength(jaArrays); i++)
         DelayCommand(0.1, DeleteLocalJson(GetModule(), JsonGetString(JsonArrayGet(jaArrays, i))));
@@ -278,12 +289,10 @@ void schema_scope_PushArrayItem(string sScope, json jItem)
 void schema_scope_PushItem(string sScope, json jItem)
 {
     json jaScope = GetLocalJson(GetModule(), sScope);
-    
     if (JsonGetType(jaScope) != JSON_TYPE_ARRAY)
         return;
 
-    jaScope = JsonArrayInsert(jaScope, jItem);
-    SetLocalJson(GetModule(), sScope, jaScope);
+    SetLocalJson(GetModule(), sScope, JsonArraySet(jaScope, schema_scope_GetDepth(), jItem));
 }
 
 /// @private Convenience functions to modify scope arrays.
@@ -463,12 +472,12 @@ string schema_output_GetErrorMessage(string sError, string sData = "")
 
 int schema_output_GetValid(json joOutputUnit)
 {
-    return (JsonObjectGet(joOutputUnit, "valid") == JsonInt(1));
+    return (JsonObjectGet(joOutputUnit, "valid") == JsonBool(TRUE));
 }
 
 json schema_output_SetValid(json joOutputUnit, int bValid = TRUE)
 {
-    return JsonObjectSet(joOutputUnit, "valid", bValid ? JSON_TRUE : JSON_FALSE);
+    return JsonObjectSet(joOutputUnit, "valid", bValid ? JsonBool(TRUE) : JsonBool(FALSE));
 }
 
 /// @private Build a minimally acceptable output object for the desired verbosity level.  This
@@ -678,7 +687,11 @@ json schema_output_SetAbsoluteKeywordLocation(json joOutput)
 ///         needs to set the annotation or error.
 json schema_output_GetOutputUnit()
 {
-    return schema_output_SetKeywordLocation(schema_output_GetMinimalObject());
+    json joOutputUnit = schema_output_GetMinimalObject();
+    joOutputUnit = schema_output_SetKeywordLocation(joOutputUnit);
+    joOutputUnit = schema_output_SetValid(joOutputUnit, TRUE);
+
+    return joOutputUnit;
 }
 
 /// @private Insert an error object into the parent node's errors array.
@@ -692,13 +705,20 @@ json schema_output_InsertParentError(json joOutputUnit, json joError)
         jaErrors = JsonArray();
 
     jaErrors = JsonArrayInsert(jaErrors, joError);
-    return schema_output_SetValid(JsonObjectSet(joOutputUnit, "errors", jaErrors), FALSE);
+    joOutputUnit = JsonObjectSet(joOutputUnit, "errors", jaErrors);
+    joOutputUnit = schema_output_SetValid(joOutputUnit, FALSE);
+
+    SetLocalJson(GetModule(), "SCHEMA_VALIDATION_RESULT", joOutputUnit); 
+    return joOutputUnit;
 }
 
 /// @private Insert an error string in an output unit.
 json schema_output_InsertChildError(json joOutputUnit, string sError)
 {
-    return schema_output_SetValid(JsonObjectSet(joOutputUnit, "error", JsonString(sError)), FALSE);
+    joOutputUnit = JsonObjectSet(joOutputUnit, "error", JsonString(sError));
+    joOutputUnit = schema_output_SetKeywordLocation(joOutputUnit);
+
+    return schema_output_SetValid(joOutputUnit, FALSE);
 }
 
 /// @private Insert an annotation object into the parent node's annotations array.
@@ -707,18 +727,32 @@ json schema_output_InsertParentAnnotation(json joOutputUnit, json joAnnotation)
     if (JsonGetType(joAnnotation) != JSON_TYPE_OBJECT)
         return joOutputUnit;
 
-    json jaErrors = JsonObjectGet(joOutputUnit, "annotations");
-    if (JsonGetType(jaErrors) != JSON_TYPE_ARRAY)
-        jaErrors = JsonArray();
+    json jaAnnotations = JsonObjectGet(joOutputUnit, "annotations");
+    if (JsonGetType(jaAnnotations) != JSON_TYPE_ARRAY)
+        jaAnnotations = JsonArray();
 
-    jaErrors = JsonArrayInsert(jaErrors, joAnnotation);
-    return schema_output_SetValid(JsonObjectSet(joOutputUnit, "annotations", jaErrors), FALSE);
+    jaAnnotations = JsonArrayInsert(jaAnnotations, joAnnotation);
+    joOutputUnit = JsonObjectSet(joOutputUnit, "annotations", jaAnnotations);
+
+    json jaErrors = JsonObjectGet(joOutputUnit, "errors");
+    int bValid = JsonGetType(jaErrors) == JSON_TYPE_ARRAY && JsonGetLength(jaErrors) > 0;
+        
+    joOutputUnit = schema_output_SetValid(joOutputUnit, !bValid);
+    SetLocalJson(GetModule(), "SCHEMA_VALIDATION_RESULT", joOutputUnit); 
+
+    return joOutputUnit;
 }
+
+/// @todo
+///     [ ] how do we handle failed keyword validations that may not fail the entire schema?
 
 /// @private Insert an annotation key:value pair into an output unit.
 json schema_output_InsertChildAnnotation(json joOutputUnit, string sKey, json jValue)
 {
-    return JsonObjectSet(joOutputUnit, sKey, jValue);
+    joOutputUnit = JsonObjectSet(joOutputUnit, sKey, jValue);
+    joOutputUnit = schema_output_SetKeywordLocation(joOutputUnit);
+
+    return schema_output_SetValid(joOutputUnit, TRUE);
 }
 
 /// @private Reduce a verbose output unit to a simple flag.
@@ -979,9 +1013,7 @@ void schema_reference_SaveSchema(json joSchema)
 
 /// @todo
 ///     [ ] Track where these JsonNull() get returns and figure out what to do with them.
-///     [x] Define SCHEMA_DEFAULT_META as a constant for the default metaschema.
 ///     [ ] Add an annotation here if $schema = "" or could not be found in db.
-///     [x] What do we do here if the file-based schema is not valid?
 ///     [ ] Need better error handling/messaging here.  Structured logging?
 ///     [ ] Ensure $dynamicReference acts like $ref if the $dynamicAnchor can't be located.
 
@@ -1474,10 +1506,6 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
 ///     [ ] Need an "environment prep" fucntion that can be called by the entrant functions that will
 ///         [ ] set the current metaschema draft version
 ///         [ ] Schedule build variables for destruction
-///         [ ] create database tables if they don't exist
-
-///     [ ] for types, how to distinguish between a boolean and in integer since they're saved as 1?
-
 
 /// @brief Validates the global "type" keyword.
 /// @param jInstance The instance to validate.
@@ -1527,13 +1555,9 @@ json schema_validate_Type(json jInstance, json jType)
     {
         int i; for (; i < JsonGetLength(jType); i++)
         {
-            schema_scope_PushLexical(IntToString(i));
-
             json joValidate = schema_validate_Type(jInstance, JsonArrayGet(jType, i));
             if (schema_output_GetValid(joValidate))
                 joOutputUnit = schema_output_InsertParentAnnotation(joOutputUnit, joValidate);
-
-            schema_scope_PopLexical();
         }
     }
 
@@ -2275,13 +2299,14 @@ json schema_validate_Object(
     if (JsonGetType(joInstance) != JSON_TYPE_OBJECT)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<instance_object>"));
 
-    json jaEvaluated = JsonArray(); // Track evaluated properties by name
+    json jaEvaluatedProperties = JsonArray();
     json jaInstanceKeys = JsonObjectKeys(joInstance);
 
     // 1. properties
     if (JsonGetType(joProperties) == JSON_TYPE_OBJECT)
     {
         json jaPropertyKeys = JsonObjectKeys(joProperties);
+        json joChild = schema_output_GetOutputUnit();
 
         int i, len = JsonGetLength(jaInstanceKeys);
         for (i = 0; i < len; ++i)
@@ -2289,17 +2314,30 @@ json schema_validate_Object(
             string sKey = JsonGetString(JsonArrayGet(jaInstanceKeys, i));
             if (JsonFind(jaPropertyKeys, JsonString(sKey)) != JsonNull())
             {
-                jaEvaluated = JsonArrayInsert(jaEvaluated, JsonString(sKey));
+                jaEvaluatedProperties = JsonArrayInsert(jaEvaluatedProperties, JsonString(sKey));
                 json joPropSchema = JsonObjectGet(joProperties, sKey);
+
+                /// @todo
+                ///     [ ] Do we need to push lexical here?
+                ///     [ ] May need to assign the keywordLocation when inserting annotations instead
+                ///         of on output unit creation.
+                schema_scope_PushLexical(sKey);
                 json joResult = schema_core_Validate(JsonObjectGet(joInstance, sKey), joPropSchema);
+                schema_scope_PopLexical();
                 
                 if (schema_output_GetValid(joResult))
-                    joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "properties", JsonString(sKey));
+                    joChild = schema_output_InsertChildAnnotation(joChild, "properties", joPropSchema);
                 else
-                    joOutputUnit = schema_output_InsertChildError(joOutputUnit, "property '" + sKey + "': " + JsonGetString(joResult) /*, "error") */);
-            }/// @todo fix all these JsonGetString(joResult, "error") issues.  What are they supposed to be?
+                    /// @todo
+                    ///     [ ] Put this error in the error text function
+                    joChild = schema_output_InsertChildError(joChild, "property does not validate against schema");
+            }
+
+            if (schema_output_GetValid(joChild))
+                joOutputUnit = schema_output_InsertParentAnnotation(joOutputUnit, joChild);
+            else
+                joOutputUnit = schema_output_InsertParentError(joOutputUnit, joChild);
         }
-        joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "properties", joProperties);
     }
 
     // 2. patternProperties
@@ -2316,7 +2354,7 @@ json schema_validate_Object(
                 string pattern = JsonGetString(JsonArrayGet(jaPatternKeys, j));
                 if (RegExpMatch(pattern, key) != JsonArray())
                 {
-                    jaEvaluated = JsonArrayInsert(jaEvaluated, JsonString(key));
+                    jaEvaluatedProperties = JsonArrayInsert(jaEvaluatedProperties, JsonString(key));
                     json joPatSchema = JsonObjectGet(joPatternProperties, pattern);
                     json joResult = schema_core_Validate(JsonObjectGet(joInstance, key), joPatSchema);
                     if (schema_output_GetValid(joResult))
@@ -2337,7 +2375,7 @@ json schema_validate_Object(
         for (i = 0; i < len; ++i)
         {
             string key = JsonGetString(JsonArrayGet(jaInstanceKeys, i));
-            if (JsonFind(jaEvaluated, JsonString(key)) == JsonNull())
+            if (JsonFind(jaEvaluatedProperties, JsonString(key)) == JsonNull())
             {
                 if (JsonGetType(joAdditionalProperties) == JSON_TYPE_BOOL && !JsonGetInt(joAdditionalProperties))
                     joOutputUnit = schema_output_InsertChildError(joOutputUnit, "additional property '" + key + "' is not allowed");
@@ -2349,7 +2387,7 @@ json schema_validate_Object(
                     else
                         joOutputUnit = schema_output_InsertChildError(joOutputUnit, "additional property '" + key + "': " + JsonGetString(joResult) /*, "error")*/);
                 }
-                jaEvaluated = JsonArrayInsert(jaEvaluated, JsonString(key));
+                jaEvaluatedProperties = JsonArrayInsert(jaEvaluatedProperties, JsonString(key));
             }
         }
         joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "additionalProperties", joAdditionalProperties);
@@ -2367,7 +2405,7 @@ json schema_validate_Object(
                 string depKey = JsonGetString(JsonArrayGet(jaDepKeys, i));
                 if (JsonFind(joInstance, JsonString(depKey)) != JsonNull())
                 {
-                    jaEvaluated = JsonArrayInsert(jaEvaluated, JsonString(depKey));
+                    jaEvaluatedProperties = JsonArrayInsert(jaEvaluatedProperties, JsonString(depKey));
                     json joDepSchema = JsonObjectGet(joDependentSchemas, depKey);
                     json joResult = schema_core_Validate(joInstance, joDepSchema);
                     if (schema_output_GetValid(joResult))
@@ -2408,7 +2446,7 @@ json schema_validate_Object(
             for (i = 0; i < len; ++i)
             {
                 string key = JsonGetString(JsonArrayGet(jaInstanceKeys, i));
-                if (JsonFind(jaEvaluated, JsonString(key)) == JsonNull())
+                if (JsonFind(jaEvaluatedProperties, JsonString(key)) == JsonNull())
                 {
                     if (JsonGetType(joUnevaluatedProperties) == JSON_TYPE_BOOL && !JsonGetInt(joUnevaluatedProperties))
                         joOutputUnit = schema_output_InsertChildError(joOutputUnit, "unevaluated property '" + key + "' is not allowed");
@@ -2569,22 +2607,14 @@ json schema_core_Validate(json jInstance, json joSchema)
 {
     /// @todo
     ///     [ ] joSchema could potentially be JsonNull(), handle that!
-    ///     [ ] _validate should always assume it's evaluating an object, so a new output
-    ///         unit is always required for it.  Any output that is the result of _validate
-    ///         that is also inserted into the result should be inserted into a parent array,
-    ///         not a child object.
 
     json joResult = JsonNull();
     json joOutputUnit = schema_output_GetOutputUnit();
 
-    /// @todo
-    ///     [ ] Is this the right return value for a simple always-true?
-    if (joSchema == JSON_TRUE)
-        return joOutputUnit;
-        //return schema_output_InsertParentAnnotation(joOutputUnit, "valid", JSON_TRUE);
+    if (joSchema == JSON_TRUE || joSchema == JsonObject())
+        return schema_output_SetValid(joOutputUnit, TRUE);
     if (joSchema == JSON_FALSE)
         return schema_output_SetValid(joOutputUnit, FALSE);
-        //return schema_output_InsertParentError(joOutputUnit, schema_output_GetErrorMessage("<validate_never>"));
 
     json jaSchemaKeys = JsonObjectKeys(joSchema);
     
@@ -2790,14 +2820,22 @@ json schema_core_Validate(json jInstance, json joSchema)
         }
 
         schema_scope_PopLexical();
+
+        
     }
 
     if (bDynamicAnchor)
         schema_scope_PopDynamic();
 
-    Debug(JsonDump(joResult, 4));
-
+    /// @todo
+    ///     [  ] Are we returning the wrong value here?  Only for the final evaluation.  joOutputUnit builds correctly,
+    ///          but we're returning joResult.  Does joOutputUnit need to be a global?
     return joResult;
+}
+
+json schema_core_GetValidationResult()
+{
+    return GetLocalJson(GetModule(), "SCHEMA_VALIDATION_RESULT");
 }
 
 /// @todo
@@ -2863,26 +2901,22 @@ int ValidateInstanceAdHoc(json jInstance, json joSchema) {
     // TODO: If $id is present, optionally register
     // TODO: Validate jInstance using schema_core_Validate
     
-    schema_core_CreateTables();
     schema_scope_Destroy();
+    schema_core_Validate(jInstance, joSchema);
 
-    json joOutputUnit = schema_core_Validate(jInstance, joSchema);
+    json joOutputUnit = schema_core_GetValidationResult();
 
-    if (schema_output_GetValid(joOutputUnit))
-    {
-        json jsId = JsonObjectGet(joSchema, "$id");
-        if (jsId != JSON_NULL && JsonGetType(jsId) == JSON_TYPE_STRING)
-        {
-            schema_reference_SaveSchema(joSchema);
-            return TRUE;
-        }
-    }
-    else
-    {
-        // Schema is invalid!
-    }
-    
-    return 0; // stub
+    //if (schema_output_GetValid(joOutputUnit))
+    //{
+    //    json jsId = JsonObjectGet(joSchema, "$id");
+    //    if (jsId != JSON_NULL && JsonGetType(jsId) == JSON_TYPE_STRING)
+    //    {
+    //        schema_reference_SaveSchema(joSchema);
+    //        return TRUE;
+    //    }
+    //}
+
+    return schema_output_GetValid(joOutputUnit);
 }
 
 /*
