@@ -1789,63 +1789,66 @@ json schema_validate_Format(json jInstance, json jFormat)
 json schema_validate_Minimum(json jInstance, json jMinimum, json jExclusiveMinimum)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
+    json jaOutput = JsonArray();
 
     int nInstanceType = JsonGetType(jInstance);
     if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<instance_number>"));
 
-    int nDraft = JsonGetInt(schema_scope_GetSchema());
-    if (nDraft == SCHEMA_DRAFT_4)
+    /// @note Validate the minimum keyword independently from exclusiveMinimum.
+    int nMinimumType = JsonGetType(jMinimum);
+    if (nMinimumType == JSON_TYPE_INTEGER || nMinimumType == JSON_TYPE_FLOAT)
     {
-        if (jMinimum == JsonNull())
-            return joOutputUnit;
-
-        float fMinimum = JsonGetFloat(jMinimum);
-        float fInstance = JsonGetFloat(jInstance);
-
-        if (JsonGetInt(jExclusiveMinimum) == TRUE)
-        {
-            if (fInstance <= fMinimum)
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusiveminimum>"));
-            else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMinimum", jMinimum);
-        }
+        if (JsonGetFloat(jInstance) >= JsonGetFloat(jMinimum))
+            jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "minimum", jMinimum));
         else
-        {
-            if (fInstance < fMinimum)
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_minimum>"));
-            else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "minimum", jMinimum);
-        }
+            jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_minimum>")));
     }
-    else if (nDraft >= SCHEMA_DRAFT_6)
+
+    /// @note In early drafts, exclusiveMinimum is a boolean value and is dependent on minimum.  If
+    ///     minimum is missing, exclusiveMinimum is ignored, otherwise, it is evaluated independently.
+    if (JsonGetType(jExclusiveMinimum) == JSON_TYPE_BOOL)
     {
-        float fInstance = JsonGetFloat(jInstance);
-
-        if (jMinimum != JsonNull())
+        if (nMinimumType == JSON_TYPE_INTEGER || nMinimumType == JSON_TYPE_FLOAT)
         {
-            if (fInstance < JsonGetFloat(jMinimum))
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_minimum>"));
+            if (jExclusiveMinimum == JsonBool(TRUE))
+            {
+                if (JsonGetFloat(jInstance) > JsonGetFloat(jMinimum))
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMinimum", jExclusiveMinimum));
+                else
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusiveminimum>")));
+            }
             else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "minimum", jMinimum);
+            {
+                if (JsonGetFloat(jInstance) >= JsonGetFloat(jMinimum))
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMinimum", jExclusiveMinimum));
+                else
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusiveminimum>")));
+            }
         }
-
-        if (jExclusiveMinimum != JsonNull())
+    }
+    else
+    {
+        /// @note In later drafts, exclusiveMinimum is a keyword containing a number and it is validated independently of
+        ///     minimum.
+        int nExclusiveMinimumType = JsonGetType(jExclusiveMinimum);
+        if (nExclusiveMinimumType == JSON_TYPE_INTEGER || nExclusiveMinimumType == JSON_TYPE_FLOAT)
         {
-            if (fInstance <= JsonGetFloat(jExclusiveMinimum))
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusiveminimum>"));
+            if (JsonGetFloat(jInstance) > JsonGetFloat(jExclusiveMinimum))
+                jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMinimum", jExclusiveMinimum));
             else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMinimum", jExclusiveMinimum);
+                jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusiveminimum>")));
         }
     }
 
-    return joOutputUnit;
+    return jaOutput;
 }
 
-/// @private Validates the number "maximum" and "exclusiveMaximum" keywords.  In earlier
-///     drafts, exclusiveMaximum is a boolean value and is not valid in the absence of
-///     maximum.  In later drafts, exclusiveMaximum is a number and validates
-///     independently from maximum.
+/// @brief Validates the number "maximum" and "exclusiveMaximum" keywords.
+/// @param jInstance The instance to validate.
+/// @param jMaximum The schema value for "maximum".
+/// @param jExclusiveMaximum The schema value for "exclusiveMaximum".
+/// @returns An output object containing the validation result.
 json schema_validate_Maximum(json jInstance, json jMaximum, json jExclusiveMaximum)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
