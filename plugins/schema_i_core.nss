@@ -1842,66 +1842,66 @@ json schema_validate_Minimum(json jInstance, json jMinimum, json jExclusiveMinim
     return joOutputUnit;
 }
 
+/// @private Validates the number "maximum" and "exclusiveMaximum" keywords.  In earlier
+///     drafts, exclusiveMaximum is a boolean value and is not valid in the absence of
+///     maximum.  In later drafts, exclusiveMaximum is a number and validates
+///     independently from maximum.
 json schema_validate_Maximum(json jInstance, json jMaximum, json jExclusiveMaximum)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
+    json jaOutput = JsonArray();
 
     int nInstanceType = JsonGetType(jInstance);
     if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<instance_number>"));
 
-    int nDraft = JsonGetInt(schema_scope_GetSchema());
-    if (nDraft == SCHEMA_DRAFT_4)
+    /// @note Validate the maximum keyword independently from exclusiveMaximum.
+    int nMaximumType = JsonGetType(jMaximum);
+    if (nMaximumType == JSON_TYPE_INTEGER || nMaximumType == JSON_TYPE_FLOAT)
     {
-        if (jMaximum == JsonNull())
-            return joOutputUnit;
-
-        float fMax = JsonGetFloat(jMaximum);
-        float fValue = JsonGetFloat(jInstance);
-
-        int bExclusive = 0;
-        if (jExclusiveMaximum != JsonNull())
-            bExclusive = JsonGetInt(jExclusiveMaximum);
-
-        if (bExclusive)
-        {
-            if (fValue >= fMax)
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusivemaximum>"));
-            else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMaximum", jMaximum);
-        }
+        if (JsonGetFloat(jInstance) <= JsonGetFloat(jMaximum))
+            jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "maximum", jMaximum));
         else
-        {
-            if (fValue > fMax)
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_maximum>"));
-            else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "maximum", jMaximum);
-        }
+            jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_maximum>")));
     }
-    else if (nDraft >= SCHEMA_DRAFT_6)
+
+    /// @note In early drafts, exclusiveMaximum is a boolean value and is dependent on maximum.  If
+    ///     maximum is missing, exclusiveMaximum is ignored, otherwise, it is evaluated independently.
+    if (JsonGetType(jExclusiveMaximum) == JSON_TYPE_BOOL)
     {
-        float fValue = JsonGetFloat(jInstance);
-
-        if (jExclusiveMaximum != JsonNull())
+        if (nMaximumType == JSON_TYPE_INTEGER || nMaximumType == JSON_TYPE_FLOAT)
         {
-            float fExMax = JsonGetFloat(jExclusiveMaximum);
-            if (fValue >= fExMax)
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusivemaximum>"));
+            if (jExclusiveMaximum == JsonBool(TRUE))
+            {
+                if (JsonGetFloat(jInstance) < JsonGetFloat(jMaximum))
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMaximum", jExclusiveMaximum));
+                else
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusivemaximum>")));
+            }
             else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMaximum", jExclusiveMaximum);
+            {
+                if (JsonGetFloat(jInstance) <= JsonGetFloat(jMaximum))
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMaximum", jExclusiveMaximum));
+                else
+                    jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusivemaximum>")));
+            }
         }
-
-        if (jMaximum != JsonNull())
+    }
+    else
+    {
+        /// @note In later drafts, exclusiveMaximum is a keyword containing a number and it validated independently of
+        ///     maximum.
+        int nExclusiveMaximumType = JsonGetType(jExclusiveMaximum);
+        if (nExclusiveMaximumType == JSON_TYPE_INTEGER || nExclusiveMaximumType == JSON_TYPE_FLOAT)
         {
-            float fMax = JsonGetFloat(jMaximum);
-            if (fValue > fMax)
-                return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_maximum>"));
+            if (JsonGetFloat(jInstance) < JsonGetFloat(jExclusiveMaximum))
+                jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildAnnotation(joOutputUnit, "exclusiveMaximum", jExclusiveMaximum));
             else
-                return schema_output_InsertChildAnnotation(joOutputUnit, "maximum", jMaximum);
+                jaOutput = JsonArrayInsert(jaOutput, schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_exclusivemaximum>")));
         }
     }
 
-    return joOutputUnit;
+    return jaOutput;
 }
 
 /// @private Validates the number "multipleOf" keyword.
