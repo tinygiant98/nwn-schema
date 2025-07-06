@@ -1,14 +1,14 @@
 
 #include "util_i_debug"
 
-const int SCHEMA_DRAFT_4 = 0x01;
-const int SCHEMA_DRAFT_6 = 0x02;
-const int SCHEMA_DRAFT_7 = 0x04;
-const int SCHEMA_DRAFT_2019_09 = 0x08;
-const int SCHEMA_DRAFT_2020_12 = 0x10;
+const int SCHEMA_DRAFT_4 = 1;
+const int SCHEMA_DRAFT_6 = 2;
+const int SCHEMA_DRAFT_7 = 3;
+const int SCHEMA_DRAFT_2019_09 = 4;
+const int SCHEMA_DRAFT_2020_12 = 5;
 const int SCHEMA_DRAFT_LATEST = SCHEMA_DRAFT_2020_12;
 
-const string SCHEMA_DEFAULT_META = "https://json-schema.org/draft/2020-12/schema";
+const string SCHEMA_DEFAULT_DRAFT = "https://json-schema.org/draft/2020-12/schema";
 const string SCHEMA_DEFAULT_OUTPUT = "https://json-schema.org/draft/2020-12/output/schema";
 
 const string SCHEMA_DB_SYSTEM = "schema_system";
@@ -17,7 +17,7 @@ const string SCHEMA_DB_TEST = "schema_test";
 
 /// @todo
 ///     [ ] What do I do with this?  Numbering/nDraft without using constants?  Default (last)?
-json jaMetaSchemas = JsonParse(r"[
+json jaSchemaDrafts = JsonParse(r"[
     ""http://json-schema.org/draft-04/schema#"",
     ""http://json-schema.org/draft-06/schema#"",
     ""http://json-schema.org/draft-07/schema#"",
@@ -1062,11 +1062,11 @@ json schema_reference_GetSchema(string sSchemaID)
             ///     be performed before saving the schema to the database.
             string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
             if (sSchema == "")
-                sSchema = SCHEMA_DEFAULT_META;
+                sSchema = SCHEMA_DEFAULT_DRAFT;
 
             json joMeta = schema_reference_GetSchema(sSchema);
-            if (JsonGetType(joMeta) == JSON_TYPE_NULL && sSchema != SCHEMA_DEFAULT_META)
-                joMeta = schema_reference_GetSchema(SCHEMA_DEFAULT_META);
+            if (JsonGetType(joMeta) == JSON_TYPE_NULL && sSchema != SCHEMA_DEFAULT_DRAFT)
+                joMeta = schema_reference_GetSchema(SCHEMA_DEFAULT_DRAFT);
 
             if (JsonGetType(joMeta) == JSON_TYPE_NULL)
                 return JsonNull();
@@ -1284,7 +1284,7 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
         }
         else if (schema_reference_CheckMatch(jaMatchRef, JsonParse("[-1,0,0,0,0,0,1,1,-1,-1]")))
         {
-            /// @note Reference matches -> "?" query [ "#" fragment ] grammer.  Check if the
+            /// @note Reference matches -> "?" query [ "#" fragment ] grammar.  Check if the
             ///     schema's $id matches -> path [ "?" query ] grammar.  If so, use
             ///     schema.path + reference.query construct and attempt to load a stored
             ///     schema or parse a json file with the same name
@@ -1426,40 +1426,28 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef)
 /// @ todo
 ///     [x] Convert this function to search for the value in the json_tree where
 ///         the fullkey matches the current lexical pointer and $recursiveAnchor = true
-///     [ ] Do we even need these version safeguards?  If the user is using a draft
-///         schema that doesn't support $recursiveAnchor, then this function should
-///         never be called in the first place.  I think the version guardrails are
-///         really only needed in functions that have keywords whose validation
-///         behavior has changed between drafts, like 'items'.
-///     [ ] Test this whole jsAnchor == JSON_TRUE logic.  Might have to be compared
-///         to JsonInt(1) or JsonInt(TRUE) instead.
 
 json schema_reference_ResolveRecursiveRef(json joSchema)
 {
-    if (JsonGetInt(schema_scope_GetSchema()) >= SCHEMA_DRAFT_2019_09)
+    json jaDynamic = schema_scope_GetDynamic();
+    if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
+        return JsonNull();
+
+    json jaSchema = JsonArrayGet(jaDynamic, schema_scope_GetDepth());
+    if (JsonGetType(jaSchema) != JSON_TYPE_OBJECT || JsonGetLength(jaSchema) == 0)
+        return JsonNull();
+
+    int i; for (i = 1; i <= JsonGetLength(jaSchema); i++)
     {
-        json jaDynamic = schema_scope_GetDynamic();
-        if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
-            return JsonNull();
-
-        json jaSchema = JsonArrayGet(jaDynamic, schema_scope_GetDepth());
-        if (JsonGetType(jaSchema) != JSON_TYPE_OBJECT || JsonGetLength(jaSchema) == 0)
-            return JsonNull();
-
-        int i; for (i = 1; i <= JsonGetLength(jaSchema); i++)
-        {
-            json joScope = JsonArrayGet(jaSchema, i);
-            json jsAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
-            if (JsonGetType(jsAnchor) == JSON_TYPE_BOOL && jsAnchor == JSON_TRUE)
-                return joScope;
-        }
-
-        /// @note If the $recursiveAnchor is not found in the current dynamic scope,
-        ///     the $recursiveRef is treated as "$ref": "#".
-        return schema_reference_ResolveRef(joSchema, JsonString("#"));
+        json joScope = JsonArrayGet(jaSchema, i);
+        json jsAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
+        if (JsonGetType(jsAnchor) == JSON_TYPE_BOOL && jsAnchor == JSON_TRUE)
+            return joScope;
     }
 
-    return JsonNull();
+    /// @note If the $recursiveAnchor is not found in the current dynamic scope,
+    ///     the $recursiveRef is treated as "$ref": "#".
+    return schema_reference_ResolveRef(joSchema, JsonString("#"));
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -1610,9 +1598,6 @@ json schema_validate_Enum(json jInstance, json jaEnum)
 /// @returns An output object containing the validation result.
 json schema_validate_Const(json jInstance, json jConst)
 {
-    if (JsonGetInt(schema_scope_GetSchema()) == SCHEMA_DRAFT_4)
-        return JsonNull();
-
     return schema_validate_enum(jInstance, JsonArrayInsert(JsonArray(), jConst), "const");
 }
 
@@ -1973,6 +1958,8 @@ json schema_validate_UniqueItems(json jaInstance, json jbUniqueItems)
 ///         All results of schema_core_Validate will be a full node, so this node object must be inserted
 ///         into the parent node for the evaluation?  How ill this output be structured? Maybe an array of
 ///         outputs that's parsed when returning to _validate?
+///     [ ] Need another scope push/pop for the instance pathing; should be able to do the absolute pathing
+///         automatically with the tracked nDraft data and the draft array.
 
 /// @private Validates interdependent array keywords "prefixItems", "items", "contains",
 ///     "minContains", "maxContains", "unevaluatedItems".
@@ -2345,7 +2332,7 @@ json schema_validate_DependentRequired(json joInstance, json joDependentRequired
                 if (JsonFind(jaInstanceKeys, JsonArrayGet(jaRequiredKeys, j)) == JsonNull())
                 {
                     json joChildOutputUnit = schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_dependentrequired>"));
-                    joParentOutputUnit = schema_outputInsertParentAnnotation(joParentOutputUnit, joChildOutputUnit);
+                    joParentOutputUnit = schema_output_InsertParentAnnotation(joParentOutputUnit, joChildOutputUnit);
                 }
             }
         }
@@ -2374,6 +2361,7 @@ json schema_validate_Object(
     json joProperties,
     json joPatternProperties,
     json jAdditionalProperties,
+    json joDependencies,
     json joDependentSchemas,
     json jPropertyNames,
     json jUnevaluatedProperties
@@ -2400,8 +2388,6 @@ json schema_validate_Object(
             string sPropertyKey = JsonGetString(JsonArrayGet(jaInstanceKeys, i));
             if (JsonFind(jaPropertyKeys, JsonString(sPropertyKey)) != JsonNull())
             {
-                schema_scope_PushLexical(sPropertyKey);
-
                 json joChildOutputUnit = joOutputUnit;
                
                 json joProperty = JsonObjectGet(joProperties, sPropertyKey);
@@ -2418,8 +2404,6 @@ json schema_validate_Object(
                     joParentOutputUnit = schema_output_InsertParentAnnotation(joParentOutputUnit, joChildOutputUnit);
                 else
                     joParentOutputUnit = schema_output_InsertParentError(joParentOutputUnit, joChildOutputUnit);
-
-                schema_scope_PopLexical();
             }
         }
 
@@ -2522,6 +2506,7 @@ json schema_validate_Object(
 
                 string sInstanceKey = JsonGetString(JsonArrayGet(jaInstanceKeys, i));
                 json joResult = schema_core_Validate(JsonString(sInstanceKey), jPropertyNames);
+
                 if (schema_output_GetValid(joResult))
                     joChildOutputUnit = schema_output_InsertChildAnnotation(joChildOutputUnit, "propertyNames", jPropertyNames);
                 else
@@ -2811,6 +2796,7 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     /// @ todo
     ///     [ ] Handle nDraft = 0 ?
+    ///     [ ] can this be done without nDraft at all?
     int nDraft = JsonGetInt(schema_scope_GetSchema());
 
     int bDynamicAnchor = FALSE;
@@ -2826,7 +2812,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     ///         invoking another validation process.
     ///     [ ] Need ~1 and ~0 unescaping methodology.  See RFC
     
-    /// @brief Resolve reference, dynamic references and recursive references.  Dynamic and recursive
+    /// @brief Resolve references, dynamic references and recursive references.  Dynamic and recursive
     ///     references take advantage of dynamic scope to find the appropriate anchor/subschema.  If
     ///     dynamic or recursive references cannot be resolved for any reason, they revert to resolving
     ///     exactly like a normal $ref.
@@ -2860,6 +2846,10 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     /// @brief If a reference was found, incorporate the results into the output unit.  For schema drafts-4,
     /// -6 and -7, the foundational documents forbid processing adjacent keywords.
+
+    /// @todo
+    ///     [ ] Find a way to do this without nDraft; maybe the json array of schema ids?
+    ///         unlikely, since this is called from everything and joSchema may not always be the base schema
     if (JsonGetType(jRef) != JSON_TYPE_NULL)
     {
         if (JsonGetType(jResult) != JSON_TYPE_NULL)
@@ -3096,20 +3086,7 @@ int ValidateInstanceAdHoc(json jInstance, json joSchema) {
     
     schema_scope_Destroy();
     schema_core_Validate(jInstance, joSchema);
-
-    json joOutputUnit = schema_core_GetValidationResult();
-
-    //if (schema_output_GetValid(joOutputUnit))
-    //{
-    //    json jsId = JsonObjectGet(joSchema, "$id");
-    //    if (jsId != JSON_NULL && JsonGetType(jsId) == JSON_TYPE_STRING)
-    //    {
-    //        schema_reference_SaveSchema(joSchema);
-    //        return TRUE;
-    //    }
-    //}
-
-    return schema_output_GetValid(joOutputUnit);
+    return schema_output_GetValid(schema_core_GetValidationResult());
 }
 
 /*
