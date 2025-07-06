@@ -35,9 +35,16 @@ void schema_OnPlayerChat()
 //    json joResult = schema_core_Validate(jInstance, jSchema);
 //    Debug("Validation Result: " + JsonDump(joResult, 4));
 
-    int TEST = 0;
+    int TEST = 1;
     if (TEST == 0)
         ExecuteScript("schema_t_core");
+    else if (TEST == 1)
+    {
+        json j = JsonBool(TRUE);
+
+        int b = j == JSON_TRUE;
+        Notice(b ? "TRUE" : "FALSE");
+    }
 
 }
 
