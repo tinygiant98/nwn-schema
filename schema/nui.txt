@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Custom Root Object",
+  "type": "object",
+  "properties": {
+    "version": { "const": 1 },
+    "title": {
+      "oneOf": [
+        { "type": "string" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "root": { "$ref": "#/$defs/rootNode" },
+    "geometry": {
+      "oneOf": [
+        { "$ref": "#/$defs/rectangle" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "resizable": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "null" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "collapsed": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "null" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "closable": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "transparent": { "type": "boolean" },
+    "border": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "accepts_input": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "size_constraint": {
+      "oneOf": [
+        { "$ref": "#/$defs/rectangle" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "edge_constraint": {
+      "oneOf": [
+        { "$ref": "#/$defs/rectangle" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    },
+    "font": {
+      "oneOf": [
+        { "type": "string" },
+        { "$ref": "#/$defs/bindObject" }
+      ]
+    }
+  },
+  "required": [
+    "version",
+    "title",
+    "root",
+    "geometry",
+    "resizable",
+    "collapsed",
+    "closable",
+    "transparent",
+    "border",
+    "accepts_input",
+    "size_constraint",
+    "edge_constraint",
+    "font"
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "bindObject": {
+      "type": "object",
+      "properties": {
+        "bind": { "type": "string" },
+        "number_flags": { "type": "integer" },
+        "number_precision": { "type": "integer" },
+        "text_flags": { "type": "integer" }
+      },
+      "required": ["bind"],
+      "additionalProperties": true
+    },
+    "rectangle": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "w": { "type": "number" },
+        "h": { "type": "number" }
+      },
+      "required": ["x", "y", "w", "h"],
+      "additionalProperties": false
+    },
+    "bindValueObject": {
+      "$ref": "#/$defs/bindObject"
+    },
+    "node": {
+      "allOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "label": { "type": "string" },
+            "value": {},
+            "children": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/node" }
+            }
+          },
+          "required": ["type", "label", "value", "children"],
+          "additionalProperties": true
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "group" } }
+          },
+          "then": {
+            "properties": {
+              "border": {
+                "oneOf": [
+                  { "type": "boolean" },
+                  { "$ref": "#/$defs/bindObject" }
+                ]
+              },
+              "scrollbars": {
+                "oneOf": [
+                  { "type": "integer" },
+                  { "$ref": "#/$defs/bindObject" }
+                ]
+              }
+            },
+            "required": ["border", "scrollbars"]
+          }
+        }
+      ]
+    },
+    "rootNode": {
+      "allOf": [
+        { "$ref": "#/$defs/node" },
+        {
+          "properties": {
+            "type": {
+              "enum": ["col", "row", "group"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
