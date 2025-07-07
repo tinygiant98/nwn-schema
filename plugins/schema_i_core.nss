@@ -25,6 +25,14 @@ json jaSchemaDrafts = JsonParse(r"[
     ""https://json-schema.org/draft/2020-12/schema""
 ];");
 
+json joScopes = JsonParse(r"{
+    ""SCHEMA_SCOPE_LEXICAL"": [],
+    ""SCHEMA_SCOPE_DYNAMIC"": [],
+    ""SCHEMA_SCOPE_SCHEMA"": """",
+    ""SCHEMA_SCOPE_SCHEMAPATH"", [],
+    ""SCHEMA_SCOPE_INSTANCEPATH"": []
+}");
+
 /// @todo
 ///     [ ] Is there a way to remove these prototypes so they don't show up in the toolset editor?
 ///         [ ] schema_reference_ -> schema_core_ ? since it's used in a lot of places?
@@ -105,16 +113,12 @@ void schema_core_CreateTables()
 ///     validations attempts does not collide.
 void schema_scope_Destroy()
 {
-    json jaArrays = JsonParse(r"[
-        ""SCHEMA_SCOPE_LEXICAL"",
-        ""SCHEMA_SCOPE_DYNAMIC"",
-        ""SCHEMA_SCOPE_SCHEMA""
-    ]");
-
     DelayCommand(0.1, DeleteLocalJson(GetModule(), "SCHEMA_VALIDATION_RESULT"));
     DelayCommand(0.1, DeleteLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH"));
-    int i; for (; i < JsonGetLength(jaArrays); i++)
-        DelayCommand(0.1, DeleteLocalJson(GetModule(), JsonGetString(JsonArrayGet(jaArrays, i))));
+
+    json jaScopes = JsonObjectKeys(joScopes);
+    int i; for (; i < JsonGetLength(jaScopes); i++)
+        DelayCommand(0.1, DeleteLocalJson(GetModule(), JsonGetString(JsonArrayGet(jaScopes, i))));
 }
 
 /// @private Resize scope arrays to match the current scope depth.  If the array must grow,
@@ -122,12 +126,6 @@ void schema_scope_Destroy()
 void schema_scope_ResizeArrays()
 {
     int nRequiredLength = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH") + 1;
-
-    json joScopes = JsonParse(r"{
-        ""SCHEMA_SCOPE_LEXICAL"": [],
-        ""SCHEMA_SCOPE_DYNAMIC"": [],
-        ""SCHEMA_SCOPE_SCHEMA"": """"
-    }");
 
     json jaScopes = JsonObjectKeys(joScopes);
     int i; for (; i < JsonGetLength(jaScopes); i++)
@@ -183,9 +181,11 @@ json schema_scope_Get(string sScope)
 }
 
 /// @private Convenience functions to retrieve scope data.
-json schema_scope_GetLexical() {return schema_scope_Get("SCHEMA_SCOPE_LEXICAL");}
-json schema_scope_GetDynamic() {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");}
-json schema_scope_GetSchema()  {return schema_scope_Get("SCHEMA_SCOPE_SCHEMA");}
+json schema_scope_GetLexical()      {return schema_scope_Get("SCHEMA_SCOPE_LEXICAL");}
+json schema_scope_GetDynamic()      {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");}
+json schema_scope_GetSchema()       {return schema_scope_Get("SCHEMA_SCOPE_SCHEMA");}
+json schema_scope_GetSchemaPath()   {return schema_scope_Get("SCHEMA_SCOPE_SCHEMAPATH");}
+json schema_scope_GetInstancePath() {return schema_scope_Get("SCHEMA_SCOPE_INSTANCEPATH");}
 
 /// @private Deconstruct a pointer string into an array of pointer segments.
 /// @param sPointer The pointer string to deconstruct.
@@ -261,7 +261,8 @@ string schema_scope_Construct(json jaPointer = JSON_NULL)
 }
 
 /// @private Convenience function to construct pointer from lexical scope members.
-string schema_scope_ConstructLexical() {return schema_scope_Construct(schema_scope_GetLexical());}
+string schema_scope_ConstructSchemaPath() {return schema_scope_Construct(schema_scope_GetSchemaPath());}
+string schema_scope_ConstructInstancePath() {return schema_scope_Construct(schema_scope_GetInstancePath());}
 
 /// @private Push a new item into the specified scope array at the current depth.
 /// @param sScope Scope type SCHEMA_SCOPE_*; must be an array of arrays.
@@ -296,8 +297,10 @@ void schema_scope_PushItem(string sScope, json jItem)
 }
 
 /// @private Convenience functions to modify scope arrays.
-void schema_scope_PushLexical(string sPath)  {schema_scope_PushArrayItem("SCHEMA_SCOPE_LEXICAL", JsonString(sPath));}
-void schema_scope_PushDynamic(json joScope)  {schema_scope_PushArrayItem("SCHEMA_SCOPE_DYNAMIC", joScope);}
+void schema_scope_PushLexical(json joScope)      {schema_scope_PushArrayItem("SCHEMA_SCOPE_LEXICAL", joScope);}
+void schema_scope_PushDynamic(json joScope)      {schema_scope_PushArrayItem("SCHEMA_SCOPE_DYNAMIC", joScope);}
+void schema_scope_PushSchemaPath(string sPath)   {schema_scope_PushArrayItem("SCHEMA_SCOPE_SCHEMAPATH", JsonString(sPath));}
+void schema_scope_PushInstancePath(string sPath) {schema_scope_PushArrayItem("SCHEMA_SCOPE_INSTANCEPATH", JsonString(sPath));}
 
 /// @todo
 ///      [ ] Structured logging error for missing sSchema?
@@ -344,9 +347,11 @@ void schema_scope_Pop(string sScope)
 }
 
 /// @private Convenience functions to pop the last member from scope arrays.
-void schema_scope_PopLexical() {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
-void schema_scope_PopDynamic() {schema_scope_Pop("SCHEMA_SCOPE_DYNAMIC");}
-void schema_scope_PopSchema()  {schema_scope_Pop("SCHEMA_SCOPE_SCHEMA");}
+void schema_scope_PopLexical()      {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
+void schema_scope_PopDynamic()      {schema_scope_Pop("SCHEMA_SCOPE_DYNAMIC");}
+void schema_scope_PopSchema()       {schema_scope_Pop("SCHEMA_SCOPE_SCHEMA");}
+void schema_scope_PopSchemaPath()   {schema_scope_Pop("SCHEMA_SCOPE_SCHEMAPATH");}
+void schema_scope_PopInstancePath() {schema_scope_Pop("SCHEMA_SCOPE_INSTANCEPATH");}
 
 /// @private Increment the current scope depth by 1 and modify the scope arrays to handle
 ///     the additional depth.
@@ -663,32 +668,34 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
     return JsonObject();
 }
 
-json schema_output_SetKeywordLocation(json jOutput)
+json schema_output_SetKeywordLocation(json joOutputUnit)
 {
-    return JsonObjectSet(jOutput, "keywordLocation", JsonString(schema_scope_ConstructLexical()));
+    return JsonObjectSet(joOutputUnit, "keywordLocation", JsonString(schema_scope_ConstructSchemaPath()));
 }
 
-json schema_output_SetInstanceLocation(json joOutput)
+json schema_output_SetInstanceLocation(json joOutputUnit)
 {
-    /// @todo
-    ///      [ ] Need the functionality to build the isntance pointer
-    return JsonObjectSet(joOutput, "instanceLocation", JsonString("@todo"));
+    return JsonObjectSet(joOutputUnit, "instanceLocation", JsonString(schema_scope_ConstructInstancePath()));
 }
 
-json schema_output_SetAbsoluteKeywordLocation(json joOutput)
+json schema_output_SetAbsoluteKeywordLocation(json joOutputUnit)
 {
     /// @todo
     ///      [ ] Need the functionality to build the absolute keyword pointer
-    return JsonObjectSet(joOutput, "absoluteKeywordLocation", JsonString("@todo"));
+    return JsonObjectSet(joOutputUnit, "absoluteKeywordLocation", JsonString("@todo"));
 }
 
-/// @todo
-///     [ ] Add all pathing construction here to ensure the receiving function only
-///         needs to set the annotation or error.
+/// @private Build an output unit skeleton.  keywordLocation and instanceLocation are populated here
+///     for use by parent nodes.  Child nodes will have these values overwritten as annotations and
+///     errors are added.
+/// @note keyword valid is set to TRUE here even though the query in schema_output_GetMinimalObject()
+///     specifies a value of `true` as the value is sometimes translated to integer 1 and no longer
+///     recognized as boolean for comparison purposes.
 json schema_output_GetOutputUnit()
 {
     json joOutputUnit = schema_output_GetMinimalObject();
     joOutputUnit = schema_output_SetKeywordLocation(joOutputUnit);
+    joOutputUnit = schema_output_SetInstanceLocation(joOutputUnit);
     joOutputUnit = schema_output_SetValid(joOutputUnit, TRUE);
 
     return joOutputUnit;
@@ -742,6 +749,7 @@ json schema_output_InsertChildError(json joOutputUnit, string sError)
 {
     joOutputUnit = JsonObjectSet(joOutputUnit, "error", JsonString(sError));
     joOutputUnit = schema_output_SetKeywordLocation(joOutputUnit);
+    joOutputUnit = schema_output_SetInstanceLocation(joOutputUnit);
 
     return schema_output_SetValid(joOutputUnit, FALSE);
 }
@@ -751,6 +759,7 @@ json schema_output_InsertChildAnnotation(json joOutputUnit, string sKey, json jV
 {
     joOutputUnit = JsonObjectSet(joOutputUnit, sKey, jValue);
     joOutputUnit = schema_output_SetKeywordLocation(joOutputUnit);
+    joOutputUnit = schema_output_SetInstanceLocation(joOutputUnit);
 
     return schema_output_SetValid(joOutputUnit, TRUE);
 }
@@ -1499,30 +1508,30 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
 
 /// @brief Validates the global "type" keyword.
 /// @param jInstance The instance to validate.
-/// @param jType The schema value for "type".
+/// @param jSchema The schema value for "type".
 /// @returns An output object containing the validation result.
-json schema_validate_Type(json jInstance, json jType)
+json schema_validate_Type(json jInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
-    int nTypeType = JsonGetType(jType);
+    int nTypeType = JsonGetType(jSchema);
     if (nTypeType == JSON_TYPE_STRING)
     {
         int nInstanceType = JsonGetType(jInstance);
 
-        if (JsonGetString(jType) == "number")
+        if (JsonGetString(jSchema) == "number")
         {
             if (nInstanceType == JSON_TYPE_INTEGER || nInstanceType == JSON_TYPE_FLOAT)
-                return schema_output_InsertChildAnnotation(joOutputUnit, "type", jType);
+                return schema_output_InsertChildAnnotation(joOutputUnit, "type", jSchema);
         }
-        else if (JsonGetString(jType) == "integer")
+        else if (JsonGetString(jSchema) == "integer")
         {
             if (nInstanceType == JSON_TYPE_INTEGER || nInstanceType == JSON_TYPE_FLOAT)
             {
                 float f = JsonGetFloat(jInstance);
 
                 if (IntToFloat(FloatToInt(f)) == f)
-                    return schema_output_InsertChildAnnotation(joOutputUnit, "type", jType);
+                    return schema_output_InsertChildAnnotation(joOutputUnit, "type", jSchema);
             }
         }
         else
@@ -1537,16 +1546,16 @@ json schema_validate_Type(json jInstance, json jType)
                 ""boolean""
             ]");
 
-            json jiFind = JsonFind(jaTypes, jType);
+            json jiFind = JsonFind(jaTypes, jSchema);
             if (JsonGetType(jiFind) != JSON_TYPE_NULL && JsonGetInt(jiFind) == nInstanceType)
-                return schema_output_InsertChildAnnotation(joOutputUnit, "type", jType);
+                return schema_output_InsertChildAnnotation(joOutputUnit, "type", jSchema);
         }
     }
     else if (nTypeType == JSON_TYPE_ARRAY || nTypeType == JSON_TYPE_OBJECT)
     {
-        int i; for (; i < JsonGetLength(jType); i++)
+        int i; for (; i < JsonGetLength(jSchema); i++)
         {
-            json joValidate = schema_validate_Type(jInstance, JsonArrayGet(jType, i));
+            json joValidate = schema_validate_Type(jInstance, JsonArrayGet(jSchema, i));
             if (schema_output_GetValid(joValidate))
                 joOutputUnit = schema_output_InsertParentAnnotation(joOutputUnit, joValidate);
         }
@@ -1556,56 +1565,56 @@ json schema_validate_Type(json jInstance, json jType)
     if (JsonGetType(jaAnnotations) == JSON_TYPE_NULL || JsonGetLength(jaAnnotations) == 0)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_type>"));
     else if (nTypeType == JSON_TYPE_ARRAY && JsonGetLength(jaAnnotations) > 0)
-        return schema_output_InsertChildAnnotation(schema_output_GetOutputUnit(), "type", jType);
+        return schema_output_InsertChildAnnotation(schema_output_GetOutputUnit(), "type", jSchema);
 
     return joOutputUnit;
 }
 
 /// @brief Validates the global "enum" and "const" keywords.
 /// @param jInstance The instance to validate.
-/// @param jaEnum The array of valid elements for enum/const. Assumed to be validated against the metaschema.
+/// @param jSchema The array of valid elements for enum/const. Assumed to be validated against the metaschema.
 /// @returns An output object containing the validation result.
 /// @note Due to NWN's nlohmann::json implementation, JsonFind() conducts a
 ///     deep comparison of the instance and enum/const values; separate handling
 ///     for the various json types is not required.
-json schema_validate_enum(json jInstance, json jaEnum, string sDescriptor)
+json schema_validate_enum(json jInstance, json jSchema, string sDescriptor)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
-    if (JsonGetType(JsonFind(jaEnum, jInstance)) == JSON_TYPE_NULL)
+    if (JsonGetType(JsonFind(jSchema, jInstance)) == JSON_TYPE_NULL)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_enum>") + sDescriptor);
     else
     {
         if (sDescriptor == "enum")
-            return schema_output_InsertChildAnnotation(joOutputUnit, "enum", jaEnum);
+            return schema_output_InsertChildAnnotation(joOutputUnit, "enum", jSchema);
         else
-            return schema_output_InsertChildAnnotation(joOutputUnit, "const", JsonArrayGet(jaEnum, 0));
+            return schema_output_InsertChildAnnotation(joOutputUnit, "const", JsonArrayGet(jSchema, 0));
     }
 }
 
 /// @brief Validates the global "enum" keyword.
 /// @param jInstance The instance to validate.
-/// @param jaSchema The schema value for "enum".
+/// @param jSchema The schema value for "enum".
 /// @returns An output object containing the validation result.
-json schema_validate_Enum(json jInstance, json jaSchema)
+json schema_validate_Enum(json jInstance, json jSchema)
 {
-    return schema_validate_enum(jInstance, jaSchema, "enum");
+    return schema_validate_enum(jInstance, jSchema, "enum");
 }
 
 /// @brief Validates the global "const" keyword.
 /// @param jInstance The instance to validate.
-/// @param jConst The schema value for "const".
+/// @param jSchema The schema value for "const".
 /// @returns An output object containing the validation result.
-json schema_validate_Const(json jInstance, json jConst)
+json schema_validate_Const(json jInstance, json jSchema)
 {
-    return schema_validate_enum(jInstance, JsonArrayInsert(JsonArray(), jConst), "const");
+    return schema_validate_enum(jInstance, JsonArrayInsert(JsonArray(), jSchema), "const");
 }
 
 /// @brief Validates the string "minLength" keyword.
 /// @param jsInstance The instance to validate.
-/// @param jMinLength The schema value for "minLength".
+/// @param jSchema The schema value for "minLength".
 /// @returns An output object containing the validation result.
-json schema_validate_MinLength(json jsInstance, json jMinLength)
+json schema_validate_MinLength(json jsInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -1613,17 +1622,17 @@ json schema_validate_MinLength(json jsInstance, json jMinLength)
     if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
         return schema_output_InsertChildAnnotation(joOutputUnit, "minLength", JsonString("keyword ignored due to instance type"));
 
-    if (GetStringLength(JsonGetString(jsInstance)) * 1.0 >= JsonGetFloat(jMinLength))
-        return schema_output_InsertChildAnnotation(joOutputUnit, "minLength", jMinLength);
+    if (GetStringLength(JsonGetString(jsInstance)) * 1.0 >= JsonGetFloat(jSchema))
+        return schema_output_InsertChildAnnotation(joOutputUnit, "minLength", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_minlength>"));
 }
 
 /// @brief Validates the string "maxLength" keyword.
 /// @param jsInstance The instance to validate.
-/// @param jiMaxLength The schema value for "maxLength" (assumed to be a non-negative integer).
+/// @param jSchema The schema value for "maxLength" (assumed to be a non-negative integer).
 /// @returns An output object containing the validation result.
-json schema_validate_MaxLength(json jsInstance, json jiMaxLength)
+json schema_validate_MaxLength(json jsInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
     
@@ -1631,17 +1640,17 @@ json schema_validate_MaxLength(json jsInstance, json jiMaxLength)
     if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
         return schema_output_InsertChildAnnotation(joOutputUnit, "maxLength", JsonString("keyword ignored due to instance type"));
 
-    if (GetStringLength(JsonGetString(jsInstance)) <= JsonGetInt(jiMaxLength))
-        return schema_output_InsertChildAnnotation(joOutputUnit, "maxLength", jiMaxLength);
+    if (GetStringLength(JsonGetString(jsInstance)) <= JsonGetInt(jSchema))
+        return schema_output_InsertChildAnnotation(joOutputUnit, "maxLength", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_maxlength>"));
 }
 
 /// @brief Validates the string "pattern" keyword.
 /// @param jsInstance The instance to validate.
-/// @param jsPattern The schema value for "pattern".
+/// @param jSchema The schema value for "pattern".
 /// @returns An output object containing the validation result.
-json schema_validate_Pattern(json jsInstance, json jsPattern)
+json schema_validate_Pattern(json jsInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
     
@@ -1649,8 +1658,8 @@ json schema_validate_Pattern(json jsInstance, json jsPattern)
     if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
         return schema_output_InsertChildAnnotation(joOutputUnit, "pattern", JsonString("keyword ignored due to instance type"));
 
-    if (RegExpMatch(JsonGetString(jsPattern), JsonGetString(jsInstance)) != JsonArray())
-        return schema_output_InsertChildAnnotation(joOutputUnit, "pattern", jsPattern);
+    if (RegExpMatch(JsonGetString(jSchema), JsonGetString(jsInstance)) != JsonArray())
+        return schema_output_InsertChildAnnotation(joOutputUnit, "pattern", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_pattern>"));
 }
@@ -1660,9 +1669,9 @@ json schema_validate_Pattern(json jsInstance, json jsPattern)
 
 /// @brief Validates the string "format" keyword.
 /// @param jInstance The instance to validate.
-/// @param jFormat The schema value for "format".
+/// @param jSchema The schema value for "format".
 /// @returns An output object containing the validation result.
-json schema_validate_Format(json jInstance, json jFormat)
+json schema_validate_Format(json jInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -1670,7 +1679,7 @@ json schema_validate_Format(json jInstance, json jFormat)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<instance_string>"));
 
     string sInstance = JsonGetString(jInstance);
-    string sFormat = JsonGetString(jFormat);
+    string sFormat = JsonGetString(jSchema);
     int bValid = FALSE;
 
     if (sFormat == "email")    
@@ -1762,7 +1771,7 @@ json schema_validate_Format(json jInstance, json jFormat)
     }
 
     if (bValid)
-        joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "format", jFormat);
+        joOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, "format", jSchema);
     else
         return schema_output_InsertChildError(schema_output_SetValid(joOutputUnit, FALSE), "instance does not match format: " + sFormat);
 
@@ -1880,9 +1889,9 @@ json schema_validate_Maximum(json jInstance, json jMaximum, json jExclusiveMaxim
 
 /// @private Validates the number "multipleOf" keyword.
 /// @param jInstance The instance to validate.
-/// @param jMultipleOf The schema value for "multipleOf".
+/// @param jSchema The schema value for "multipleOf".
 /// @returns An output object containing the validation result.
-json schema_validate_MultipleOf(json jInstance, json jMultipleOf)
+json schema_validate_MultipleOf(json jInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -1891,18 +1900,18 @@ json schema_validate_MultipleOf(json jInstance, json jMultipleOf)
     if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
         return schema_output_InsertChildAnnotation(joOutputUnit, "multipleOf", JsonString("keyword ignored due to instance type"));
 
-    float fMultiple = JsonGetFloat(jInstance) / JsonGetFloat(jMultipleOf);
+    float fMultiple = JsonGetFloat(jInstance) / JsonGetFloat(jSchema);
     if (fabs(fMultiple - IntToFloat(FloatToInt(fMultiple))) < 0.00001)
-        return schema_output_InsertChildAnnotation(joOutputUnit, "multipleOf", jMultipleOf);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "multipleOf", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_multipleof>"));
 }
 
 /// @private Validates the array "minItems" keyword.
 /// @param jaInstance The instance to validate.
-/// @param jMinItems The schema value for "minItems".
+/// @param jSchema The schema value for "minItems".
 /// @returns An output object containing the validation result.
-json schema_validate_MinItems(json jaInstance, json jMinItems)
+json schema_validate_MinItems(json jaInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -1910,17 +1919,17 @@ json schema_validate_MinItems(json jaInstance, json jMinItems)
     if (JsonGetType(jaInstance) != JSON_TYPE_ARRAY)
         return schema_output_InsertChildAnnotation(joOutputUnit, "multipleOf", JsonString("keyword ignored due to instance type"));
 
-    if (JsonGetLength(jaInstance) >= JsonGetInt(jMinItems))
-        return schema_output_InsertChildAnnotation(joOutputUnit, "minItems", jMinItems);
+    if (JsonGetLength(jaInstance) >= JsonGetInt(jSchema))
+        return schema_output_InsertChildAnnotation(joOutputUnit, "minItems", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_minitems>"));
 }
 
 /// @private Validates the array "maxItems" keyword.
 /// @param jaInstance The instance to validate.
-/// @param jMaxItems The schema value for "maxItems".
+/// @param jSchema The schema value for "maxItems".
 /// @returns An output object containing the validation result.
-json schema_validate_MaxItems(json jaInstance, json jMaxItems)
+json schema_validate_MaxItems(json jaInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -1928,17 +1937,17 @@ json schema_validate_MaxItems(json jaInstance, json jMaxItems)
     if (JsonGetType(jaInstance) != JSON_TYPE_ARRAY)
         return schema_output_InsertChildAnnotation(joOutputUnit, "multipleOf", JsonString("keyword ignored due to instance type"));
 
-    if (JsonGetLength(jaInstance) <= JsonGetInt(jMaxItems))
-        return schema_output_InsertChildAnnotation(joOutputUnit, "maxItems", jMaxItems);
+    if (JsonGetLength(jaInstance) <= JsonGetInt(jSchema))
+        return schema_output_InsertChildAnnotation(joOutputUnit, "maxItems", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_maxitems>"));
 }
 
 /// @private Validates the array "uniqueItems" keyword.
 /// @param jaInstance The instance to validate.
-/// @param jbUniqueItems The schema value for "uniqueItems".
+/// @param jSchema The schema value for "uniqueItems".
 /// @returns An output object containing the validation result.
-json schema_validate_UniqueItems(json jaInstance, json jbUniqueItems)
+json schema_validate_UniqueItems(json jaInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -1946,11 +1955,11 @@ json schema_validate_UniqueItems(json jaInstance, json jbUniqueItems)
     if (JsonGetType(jaInstance) != JSON_TYPE_ARRAY)
         return schema_output_InsertChildAnnotation(joOutputUnit, "uniqueItems", JsonString("keyword ignored due to instance type"));
 
-    if (jbUniqueItems == JSON_FALSE)
-        return schema_output_InsertChildAnnotation(joOutputUnit, "uniqueItems", jbUniqueItems);
+    if (jSchema == JSON_FALSE)
+        return schema_output_InsertChildAnnotation(joOutputUnit, "uniqueItems", jSchema);
 
     if (JsonGetLength(jaInstance) == JsonGetLength(JsonArrayTransform(jaInstance, JSON_ARRAY_UNIQUE)))
-        return schema_output_InsertChildAnnotation(joOutputUnit, "uniqueItems", jbUniqueItems);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "uniqueItems", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_uniqueitems>"));
 }
@@ -2063,7 +2072,7 @@ json schema_validate_Array(
        
         int i; for (; i < nSchemasLength && i < nInstanceLength; i++)
         {
-            schema_scope_PushLexical(IntToString(i));
+            schema_scope_PushSchemaPath(IntToString(i));
 
             json joChildOutputUnit = schema_output_GetOutputUnit();
 
@@ -2084,7 +2093,7 @@ json schema_validate_Array(
             else
                 joParentOutputUnit = schema_output_InsertParentError(joParentOutputUnit, joChildOutputUnit);
 
-            schema_scope_PopLexical();
+            schema_scope_PopSchemaPath();
         }
 
         jaOutput = JsonArrayInsert(jaOutput, joParentOutputUnit);
@@ -2100,7 +2109,7 @@ json schema_validate_Array(
 
         int i; for (i = nSchemasLength; i < nInstanceLength; i++)
         {
-            schema_scope_PushLexical(IntToString(i));
+            schema_scope_PushSchemaPath(IntToString(i));
             jaEvaluatedIndices = JsonArrayInsert(jaEvaluatedIndices, JsonInt(i));
 
             if (jItems == JSON_TRUE)
@@ -2115,7 +2124,7 @@ json schema_validate_Array(
             else
                 joParentOutputUnit = schema_output_InsertParentError(joParentOutputUnit, joChildOutputUnit);
 
-            schema_scope_PopLexical();
+            schema_scope_PopSchemaPath();
         }
 
         jaOutput = JsonArrayInsert(jaOutput, joParentOutputUnit);
@@ -2129,7 +2138,7 @@ json schema_validate_Array(
 
         int i; for (i = nSchemasLength; i < nInstanceLength; i++)
         {
-            schema_scope_PushLexical(IntToString(i));
+            schema_scope_PushSchemaPath(IntToString(i));
 
             json joChildOutputUnit = schema_output_GetOutputUnit();
 
@@ -2146,7 +2155,7 @@ json schema_validate_Array(
             else
                 joParentOutputUnit = schema_output_InsertParentError(joParentOutputUnit, joChildOutputUnit);
 
-            schema_scope_PopLexical();
+            schema_scope_PopSchemaPath();
         }
 
         jaOutput = JsonArrayInsert(jaOutput, joParentOutputUnit);
@@ -2252,7 +2261,7 @@ json schema_validate_Array(
     ///     keyword is an array; it is ignored if items is not present or if items is a schema.  unevaluatedItems should
     ///     be validated after all other keywords have been exhausted and unevaluated items remain in the array.
     int nSchemasType = JsonGetType(jSchemas);
-    if (nSchemasType != JSON_TYPE_NULL)
+    if (nSchemasType == JSON_TYPE_OBJECT || nSchemasType == JSON_TYPE_BOOL)
     {
         json joChildOutputUnit, joOutputUnit = schema_output_GetOutputUnit();
 
@@ -2297,9 +2306,9 @@ json schema_validate_Array(
 
 /// @private Validates the object "required" keyword.
 /// @param joInstance The object instance to validate.
-/// @param jaSchema The schema value for "required".
+/// @param jSchema The schema value for "required".
 /// @returns An output object containing the validation result.
-json schema_validate_Required(json joInstance, json jaSchema)
+json schema_validate_Required(json joInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -2309,9 +2318,9 @@ json schema_validate_Required(json joInstance, json jaSchema)
 
     json jaMissingProperties = JsonArray();
     json jaInstanceKeys = JsonObjectKeys(joInstance);
-    int i; for (; i < JsonGetLength(jaSchema); i++)
+    int i; for (; i < JsonGetLength(jSchema); i++)
     {
-        json jProperty = JsonArrayGet(jaSchema, i);
+        json jProperty = JsonArrayGet(jSchema, i);
         if (JsonFind(jaInstanceKeys, jProperty) == JsonNull())
             jaMissingProperties = JsonArrayInsert(jaMissingProperties, jProperty);
     }
@@ -2319,7 +2328,7 @@ json schema_validate_Required(json joInstance, json jaSchema)
     if (JsonGetLength(jaMissingProperties) > 0)
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_required>"));
     else
-        return schema_output_InsertChildAnnotation(joOutputUnit, "required", jaSchema);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "required", jSchema);
 }
 
 /// @private Validates the object "minProperties" keyword.
@@ -2342,9 +2351,9 @@ json schema_validate_MinProperties(json joInstance, json jSchema)
 
 /// @private Validates the object "maxProperties" keyword.
 /// @param joInstance The object instance to validate.
-/// @param jMaxProperties The schema value for "maxProperties".
+/// @param jSchema The schema value for "maxProperties".
 /// @returns An output object containing the validation result.
-json schema_validate_MaxProperties(json joInstance, json jMaxProperties)
+json schema_validate_MaxProperties(json joInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -2352,17 +2361,17 @@ json schema_validate_MaxProperties(json joInstance, json jMaxProperties)
     if (JsonGetType(joInstance) != JSON_TYPE_OBJECT)
         return schema_output_InsertChildAnnotation(joOutputUnit, "maxProperties", JsonString("keyword ignored due to instance type"));
 
-    if (JsonGetLength(joInstance) > JsonGetInt(jMaxProperties))
+    if (JsonGetLength(joInstance) > JsonGetInt(jSchema))
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_maxproperties>"));
     else
-        return schema_output_InsertChildAnnotation(joOutputUnit, "maxProperties", jMaxProperties);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "maxProperties", jSchema);
 }
 
 /// @brief Validates the object "dependentRequired" keyword.
 /// @param joInstance The object instance to validate.
 /// @param joDependentRequired The schema value for "dependentRequired".
 /// @returns An output object containing the validation result.
-json schema_validate_DependentRequired(json joInstance, json joDependentRequired)
+json schema_validate_DependentRequired(json joInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
@@ -2371,7 +2380,7 @@ json schema_validate_DependentRequired(json joInstance, json joDependentRequired
         return schema_output_InsertChildAnnotation(joOutputUnit, "dependentRequired", JsonString("keyword ignored due to instance type"));
 
     json jaInstanceKeys = JsonObjectKeys(joInstance);
-    json jaDependentRequiredKeys = JsonObjectKeys(joDependentRequired);
+    json jaDependentRequiredKeys = JsonObjectKeys(jSchema);
 
     json joParentOutputUnit = joOutputUnit;
 
@@ -2380,7 +2389,7 @@ json schema_validate_DependentRequired(json joInstance, json joDependentRequired
         string sDependentRequiredKey = JsonGetString(JsonArrayGet(jaDependentRequiredKeys, i));
         if (JsonFind(jaInstanceKeys, JsonString(sDependentRequiredKey)) != JsonNull())
         {
-            json jaRequiredKeys = JsonObjectGet(joDependentRequired, sDependentRequiredKey);
+            json jaRequiredKeys = JsonObjectGet(jSchema, sDependentRequiredKey);
             if (JsonGetType(jaRequiredKeys) == JSON_TYPE_ARRAY)
             {
                 int j; for (; j < JsonGetLength(jaRequiredKeys); j++)
@@ -2397,7 +2406,7 @@ json schema_validate_DependentRequired(json joInstance, json joDependentRequired
 
     json jaErrors = JsonObjectGet(joParentOutputUnit, "errors");
     if (JsonGetType(jaErrors) == JSON_TYPE_NULL || JsonGetLength(jaErrors) == 0)
-        return schema_output_InsertChildAnnotation(joOutputUnit, "dependentRequired", joDependentRequired);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "dependentRequired", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_dependentrequired>"));
 }
@@ -2721,16 +2730,16 @@ json schema_validate_Object(
 
 /// @brief Validates the applicator "not" keyword
 /// @param jInstance The instance to validate.
-/// @param joNot The schema value for "not".
+/// @param jSchema The schema value for "not".
 /// @returns An output object containing the validation result.
-json schema_validate_Not(json jInstance, json joNot)
+json schema_validate_Not(json jInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
-    if (schema_output_GetValid(schema_core_Validate(jInstance, joNot)))
+    if (schema_output_GetValid(schema_core_Validate(jInstance, jSchema)))
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_not>"));
     else
-        return schema_output_InsertChildAnnotation(joOutputUnit, "not", joNot);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "not", jSchema);
 }
 
 /// @todo
@@ -2739,52 +2748,52 @@ json schema_validate_Not(json jInstance, json joNot)
 
 /// @brief Validates the applicator "allOf" keyword
 /// @param jInstance The instance to validate.
-/// @param jaSchema The schema value for "allOf".
+/// @param jSchema The schema value for "allOf".
 /// @returns An output object containing the validation result.
-json schema_validate_AllOf(json jInstance, json jaSchema)
+json schema_validate_AllOf(json jInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
     json joParentOutputUnit = joOutputUnit;
 
-    int i; for (; i < JsonGetLength(jaSchema); i++)
+    int i; for (; i < JsonGetLength(jSchema); i++)
     {
-        schema_scope_PushLexical(IntToString(i));
+        schema_scope_PushSchemaPath(IntToString(i));
 
-        if (!schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jaSchema, i))))
+        if (!schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jSchema, i))))
         {
             json joChildOutputUnit = schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_allof>"));
             joParentOutputUnit = schema_output_InsertParentError(joParentOutputUnit, joChildOutputUnit);
         }
 
-        schema_scope_PopLexical();
+        schema_scope_PopSchemaPath();
     }
 
     json jaErrors = JsonObjectGet(joParentOutputUnit, "errors");
     if (JsonGetType(jaErrors) == JSON_TYPE_NULL || JsonGetLength(jaErrors) == 0)
-        return schema_output_InsertChildAnnotation(joOutputUnit, "allOf", jaSchema);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "allOf", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_allof>"));
 }
 
 /// @brief Validates the applicator "anyOf" keyword
 /// @param jInstance The instance to validate.
-/// @param jaSchema The schema value for "anyOf".
+/// @param jSchema The schema value for "anyOf".
 /// @returns An output object containing the validation result.
-json schema_validate_AnyOf(json jInstance, json jaSchema)
+json schema_validate_AnyOf(json jInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
-    int i; for (; i < JsonGetLength(jaSchema); i++)
+    int i; for (; i < JsonGetLength(jSchema); i++)
     {
-        schema_scope_PushLexical(IntToString(i));
+        schema_scope_PushSchemaPath(IntToString(i));
 
-        if (schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jaSchema, i))))
+        if (schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jSchema, i))))
         {
-            schema_scope_PopLexical();
-            return schema_output_InsertChildAnnotation(joOutputUnit, "anyOf", jaSchema);
+            schema_scope_PopSchemaPath();
+            return schema_output_InsertChildAnnotation(joOutputUnit, "anyOf", jSchema);
         }
 
-        schema_scope_PopLexical();
+        schema_scope_PopSchemaPath();
     }
 
     return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_anyof>"));
@@ -2792,25 +2801,25 @@ json schema_validate_AnyOf(json jInstance, json jaSchema)
 
 /// @brief Validates the applicator "oneOf" keyword
 /// @param jInstance The instance to validate.
-/// @param jaSchema The schema value for "oneOf".
+/// @param jSchema The schema value for "oneOf".
 /// @returns An output object containing the validation result.
-json schema_validate_OneOf(json jInstance, json jaSchema)
+json schema_validate_OneOf(json jInstance, json jSchema)
 {
     json joOutputUnit = schema_output_GetOutputUnit();
 
     int nMatches;
-    int i; for (; i < JsonGetLength(jaSchema); i++)
+    int i; for (; i < JsonGetLength(jSchema); i++)
     {
-        schema_scope_PushLexical(IntToString(i));
+        schema_scope_PushSchemaPath(IntToString(i));
 
-        if (schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jaSchema, i))))
+        if (schema_output_GetValid(schema_core_Validate(jInstance, JsonArrayGet(jSchema, i))))
             nMatches++;
 
-        schema_scope_PopLexical();
+        schema_scope_PopSchemaPath();
     }
 
     if (nMatches == 1)
-        return schema_output_InsertChildAnnotation(joOutputUnit, "oneOf", jaSchema);
+        return schema_output_InsertChildAnnotation(joOutputUnit, "oneOf", jSchema);
     else
         return schema_output_InsertChildError(joOutputUnit, schema_output_GetErrorMessage("<validate_oneof>"));
 }
@@ -2907,27 +2916,27 @@ json schema_core_Validate(json jInstance, json joSchema)
     json jRef = JsonObjectGet(joSchema, "$ref");
     if (JsonGetType(jRef) != JSON_TYPE_NULL)
     {
-        schema_scope_PushLexical("$ref");
+        schema_scope_PushSchemaPath("$ref");
         jResult = schema_core_Validate(jInstance, schema_reference_ResolveRef(joSchema, jRef));
-        schema_scope_PopLexical();
+        schema_scope_PopSchemaPath();
     }
     else
     {
         jRef = JsonObjectGet(joSchema, "$dynamicRef");
         if (JsonGetType(jRef) != JSON_TYPE_NULL)
         {
-            schema_scope_PushLexical("$dynamicRef");
+            schema_scope_PushSchemaPath("$dynamicRef");
             jResult = schema_core_Validate(jInstance, schema_reference_ResolveDynamicRef(joSchema, jRef));
-            schema_scope_PopLexical();
+            schema_scope_PopSchemaPath();
         }
         else
         {
             jRef = JsonObjectGet(joSchema, "$recursiveRef");
             if (JsonGetType(jRef) != JSON_TYPE_NULL)
             {
-                schema_scope_PushLexical("$recursiveRef");
+                schema_scope_PushSchemaPath("$recursiveRef");
                 jResult = schema_core_Validate(jInstance, schema_reference_ResolveRecursiveRef(joSchema));
-                schema_scope_PopLexical();
+                schema_scope_PopSchemaPath();
             }
         }
     }
@@ -2972,7 +2981,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     int i; for (; i < JsonGetLength(jaSchemaKeys); i++)
     {
         string sKey = JsonGetString(JsonArrayGet(jaSchemaKeys, i));
-        schema_scope_PushLexical(sKey);
+        schema_scope_PushSchemaPath(sKey);
         
         if (sKey == "if" || sKey == "then" || sKey == "else")
         {
@@ -3096,7 +3105,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             ///     [ ] When integrating joResult, we'll make JsonNull() mean that the keyword is not handled and/or supported?
         }
 
-        schema_scope_PopLexical();        
+        schema_scope_PopSchemaPath();        
     }
 
     if (bDynamicAnchor)
