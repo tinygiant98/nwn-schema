@@ -2042,32 +2042,32 @@ json schema_validate_Array(
     ///     is a json object, determine if it is a pseudo-array.  If a pseudo-array, convert to a json array
     ///     and perform tuple validation.  Otherwise, validate prefixItems if it exists.
 
-    json jaTupleSchemas;
+    json jSchemas;
     string sKeyword;
 
     if (JsonGetType(jItems) == JSON_TYPE_ARRAY)
     {
-        jaTupleSchemas = jItems;
+        jSchemas = jItems;
         sKeyword = "items";
     }
     else
     {
-        jaTupleSchemas = jaPrefixItems;
+        jSchemas = jaPrefixItems;
         sKeyword = "prefixItems";
     }
 
-    int nTupleSchemas = JsonGetType(jaTupleSchemas) == JSON_TYPE_ARRAY ? JsonGetLength(jaTupleSchemas) : 0;
-    if (nTupleSchemas > 0)
+    int nSchemasLength = JsonGetType(jSchemas) == JSON_TYPE_ARRAY ? JsonGetLength(jSchemas) : 0;
+    if (nSchemasLength > 0)
     {
         json joParentOutputUnit = schema_output_GetOutputUnit();
        
-        int i; for (; i < nTupleSchemas && i < nInstanceLength; i++)
+        int i; for (; i < nSchemasLength && i < nInstanceLength; i++)
         {
             schema_scope_PushLexical(IntToString(i));
 
             json joChildOutputUnit = schema_output_GetOutputUnit();
 
-            json joTupleSchema = JsonArrayGet(jaTupleSchemas, i);
+            json joTupleSchema = JsonArrayGet(jSchemas, i);
             json joResult = schema_core_Validate(JsonArrayGet(jaInstance, i), joTupleSchema);
 
             if (schema_output_GetValid(joResult))
@@ -2098,7 +2098,7 @@ json schema_validate_Array(
     {
         json joChildOutputUnit, joParentOutputUnit = schema_output_GetOutputUnit();
 
-        int i; for (i = nTupleSchemas; i < nInstanceLength; i++)
+        int i; for (i = nSchemasLength; i < nInstanceLength; i++)
         {
             schema_scope_PushLexical(IntToString(i));
             jaEvaluatedIndices = JsonArrayInsert(jaEvaluatedIndices, JsonInt(i));
@@ -2127,7 +2127,7 @@ json schema_validate_Array(
         ///     prefixItems wasn't a valid keyword.
         json joParentOutputUnit = schema_output_GetOutputUnit();
 
-        int i; for (i = nTupleSchemas; i < nInstanceLength; i++)
+        int i; for (i = nSchemasLength; i < nInstanceLength; i++)
         {
             schema_scope_PushLexical(IntToString(i));
 
@@ -2236,32 +2236,31 @@ json schema_validate_Array(
     
     int nAdditionalItemsType = JsonGetType(jAdditionalItems);
     int nUnevaluatedItemsType = JsonGetType(jUnevaluatedItems);
-    json jUnevaluated = JsonNull();
 
     if (nAdditionalItemsType == JSON_TYPE_OBJECT || nAdditionalItemsType == JSON_TYPE_BOOL)
     {
         sKeyword = "additionalItems";
-        jUnevaluated = jAdditionalItems;
+        jSchemas = jAdditionalItems;
     }
     else if (nUnevaluatedItemsType == JSON_TYPE_OBJECT || nUnevaluatedItemsType == JSON_TYPE_BOOL)
     {
         sKeyword = "unevaluatedItems";
-        jUnevaluated = jUnevaluatedItems;
+        jSchemas = jUnevaluatedItems;
     }
 
     /// @brief Validate unevaluatedItems and additionalItems keywords.  additionalItems is only evaluated if the items
     ///     keyword is an array; it is ignored if items is not present or if items is a schema.  unevaluatedItems should
     ///     be validated after all other keywords have been exhausted and unevaluated items remain in the array.
-    int nUnevaluatedType = JsonGetType(jUnevaluated);
-    if (nUnevaluatedType != JSON_TYPE_NULL)
+    int nSchemasType = JsonGetType(jSchemas);
+    if (nSchemasType != JSON_TYPE_NULL)
     {
         json joChildOutputUnit, joOutputUnit = schema_output_GetOutputUnit();
 
-        if (nUnevaluatedType == JSON_TYPE_BOOL)
+        if (nSchemasType == JSON_TYPE_BOOL)
         {
-            if (jUnevaluated == JSON_TRUE)
-                joChildOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, sKeyword, jUnevaluated);
-            else if (jUnevaluated == JSON_FALSE)
+            if (jSchemas == JSON_TRUE)
+                joChildOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, sKeyword, jSchemas);
+            else if (jSchemas == JSON_FALSE)
                 joChildOutputUnit = schema_output_InsertChildError(joOutputUnit, "<validate_" + GetStringLowerCase(sKeyword) + ">");
 
             jaOutput = JsonArrayInsert(jaOutput, joChildOutputUnit);
@@ -2275,10 +2274,10 @@ json schema_validate_Array(
                 if (JsonFind(jaEvaluatedIndices, JsonInt(i)) == JsonNull())
                 {
                     json jItem = JsonArrayGet(jaInstance, i);
-                    json jResult = schema_core_Validate(jItem, jUnevaluated);
+                    json jResult = schema_core_Validate(jItem, jSchemas);
 
                     if (schema_output_GetValid(jResult))
-                        joChildOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, sKeyword, jUnevaluated);
+                        joChildOutputUnit = schema_output_InsertChildAnnotation(joOutputUnit, sKeyword, jSchemas);
                     else
                         joChildOutputUnit = schema_output_InsertChildError(joOutputUnit, "<validate_" + GetStringLowerCase(sKeyword) + ">");
 
