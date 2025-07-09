@@ -45,6 +45,45 @@ void schema_OnPlayerChat()
         int b = j == JSON_TRUE;
         Notice(b ? "TRUE" : "FALSE");
     }
+    else if (TEST == 2)
+    {
+        json j1 = JsonParse(r"[""value1"", ""value2"", ""value3""]");
+
+        {
+            int t = Timer(); json j = JsonFind(j1, JsonString("value2")); t = Timer(t);
+            Debug("JsonFind Test:");
+            Debug("  JsonFind Result -> " + JsonDump(j));
+            Debug("  JsonFine Time -> " + IntToString(t));
+        }
+
+        {
+            int t = Timer();
+            json j2 = JsonArrayInsert(JsonArray(), JsonString("value2"));
+            json j = JsonSetOp(j1, JSON_SET_INTERSECT, j2);
+            t = Timer(t);
+
+            Debug("JsonSetOp Test:");
+            Debug("  JsonSetOp Result -> " + JsonDump(j));
+            Debug("  JsonSetOp Time -> " + IntToString(t));
+        }
+    }
+    else if (TEST == 3)
+    {
+
+
+        json j = JsonParse("[1,2,3,4,5,6,7]");
+
+        j = JsonArrayDel(j, JsonGetInt(JsonFind(j, JsonInt(3))));
+
+        Debug("After Deleted -> " + JsonDump(j));
+
+        int nIndex; json jFind;
+        if ((jFind = JsonFind(j, JsonInt(12))) != JsonNull())
+            j = JsonArrayDel(j, JsonGetInt(jFind));
+
+        Debug("Trying to delete non-existent -> " + JsonDump(j));
+
+    }
 
 }
 
