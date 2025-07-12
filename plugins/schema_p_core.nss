@@ -70,18 +70,18 @@ void schema_OnPlayerChat()
     else if (TEST == 3)
     {
 
+        //json JsonArrayGetRange(json jArray, int nBeginIndex, int nEndIndex);
 
-        json j = JsonParse("[1,2,3,4,5,6,7]");
+        json jInstance = JsonParse("[1,2,3]");
+        int nInstance = JsonGetLength(jInstance);
 
-        j = JsonArrayDel(j, JsonGetInt(JsonFind(j, JsonInt(3))));
+        json jItems = JsonParse("[1,2,3,4]");
+        int nItems = JsonGetLength(jItems);
 
-        Debug("After Deleted -> " + JsonDump(j));
+        json j = JsonArrayGetRange(jInstance, nItems, nInstance + 1);
 
-        int nIndex; json jFind;
-        if ((jFind = JsonFind(j, JsonInt(12))) != JsonNull())
-            j = JsonArrayDel(j, JsonGetInt(jFind));
+        Debug("j = " + JsonDump(j));
 
-        Debug("Trying to delete non-existent -> " + JsonDump(j));
 
     }
 
