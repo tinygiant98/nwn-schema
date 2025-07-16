@@ -11,6 +11,8 @@
 
 #include "schema_i_core"
 
+#include "nw_inc_nui"
+
 void schema_OnPlayerChat()
 {
     //ExecuteScript("schema_t_core");
@@ -84,7 +86,37 @@ void schema_OnPlayerChat()
 
 
     }
+    else if (TEST == 4)
+    {
+        object oPC = GetPCChatSpeaker();
 
+        json jWidget = NuiImage(JsonString("po_dw_f_01_s"), JsonInt(NUI_ASPECT_STRETCH), JsonInt(NUI_HALIGN_CENTER), JsonInt(NUI_VALIGN_TOP));
+        jWidget = NuiImageRegion(jWidget, NuiRect(0.0, 0.0, 32.0, 50.0));
+        jWidget = NuiHeight(jWidget, 56.0);
+        jWidget = NuiWidth(jWidget, 36.0);
+
+        json jColumn = JsonArrayInsert(JsonArray(), jWidget);
+        json jRow = JsonArrayInsert(JsonArray(), NuiCol(jColumn));
+
+        jWidget = NuiButtonImage(JsonString("beamdoge"));
+        jWidget = NuiHeight(jWidget, 29.0);
+        jWidget = NuiWidth(jWidget, 29.0);
+        jWidget = NuiMargin(jWidget, 0.0);
+        int i; for (; i < 4; i++)
+        {
+            jColumn = JsonArrayInsert(JsonArray(), jWidget);
+            jColumn = JsonArrayInsert(jColumn, jWidget);
+            jRow = JsonArrayInsert(jRow, NuiCol(jColumn));
+        }
+        
+        json jRoot = NuiRow(jRow);
+        json jWindow = NuiWindow(jRoot, JsonString(""), NuiBind("geometry"), JsonBool(TRUE), JsonBool(FALSE), JsonBool(TRUE), JsonBool(FALSE), JsonBool(TRUE));
+        
+        SendMessageToPC(oPC, JsonDump(jWindow, 4));
+
+        int nToken = NuiCreate(oPC, jWindow);
+        NuiSetBind(oPC, nToken, "geometry", NuiRect(100.0f, 100.0f, 250.0, 150.0));
+    }
 }
 
 
