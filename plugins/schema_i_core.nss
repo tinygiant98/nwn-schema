@@ -1922,48 +1922,6 @@ json schema_validate_Const(json jInstance, json jSchema)
     return schema_validate_enum(jInstance, JsonArrayInsert(JsonArray(), jSchema), "const");
 }
 
-/// @brief Validates the string "minLength" keyword.
-/// @param jsInstance The instance to validate.
-/// @param jSchema The schema value for "minLength".
-/// @returns An output object containing the validation result.
-json schema_validate_MinLength(json jsInstance, json jSchema)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-
-    string sSource = __FUNCTION__;
-    string sKeyword = "minLength";
-
-    /// @note minLength is ignored for non-string instances.
-    if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, JsonString("keyword ignored due to instance type"), sSource);
-
-    if (GetStringLength(JsonGetString(jsInstance)) * 1.0 >= JsonGetFloat(jSchema))
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-    else
-        return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-}
-
-/// @brief Validates the string "maxLength" keyword.
-/// @param jsInstance The instance to validate.
-/// @param jSchema The schema value for "maxLength" (assumed to be a non-negative integer).
-/// @returns An output object containing the validation result.
-json schema_validate_MaxLength(json jsInstance, json jSchema)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    
-    string sSource = __FUNCTION__;
-    string sKeyword = "maxLength";
-
-    /// @note maxLength is ignored for non-string instances.
-    if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, JsonString("keyword ignored due to instance type"), sSource);
-
-    if (GetStringLength(JsonGetString(jsInstance)) <= JsonGetInt(jSchema))
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-    else
-        return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-}
-
 /// @brief Validates the string "pattern" keyword.
 /// @param jsInstance The instance to validate.
 /// @param jSchema The schema value for "pattern".
@@ -2098,169 +2056,6 @@ json schema_validate_Format(json jInstance, json jSchema)
 }
 
 /// @todo
-///     [ ] put all the array-returners together?
-
-/// @brief Validates the number "minimum" and "exclusiveMinimum" keywords.
-/// @param jInstance The instance to validate.
-/// @param jMinimum The schema value for "minimum".
-/// @param jExclusiveMinimum The schema value for "exclusiveMinimum".
-/// @returns An output array containing the validation results(s).
-json schema_validate_Minimum(json jInstance, json jMinimum, json jExclusiveMinimum)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    json jaOutput = JsonArray();
-
-    string sFunction = __FUNCTION__;
-    
-    /// @note minimum and exclusiveMinimum are ignored for non-number instances.
-    int nInstanceType = JsonGetType(jInstance);
-    if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
-    {
-        string sKeyword;
-        if (JsonGetType(jMinimum) != JSON_TYPE_NULL)
-            sKeyword = "minimum";
-        else if (JsonGetType(jExclusiveMinimum) != JSON_TYPE_NULL)
-            sKeyword = "exclusiveMinimum";
-
-        schema_scope_PushSchemaPath(sKeyword);
-        jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, JsonString("keyword ignored due to instance type"), sFunction));
-        schema_scope_PopSchemaPath();
-    }
-    else
-    {
-        string sKeyword = "minimum";
-        schema_scope_PushSchemaPath(sKeyword);
-
-        /// @note Validate minimum independently from exclusiveMinimum.
-        int nMinimumType = JsonGetType(jMinimum);
-        if (nMinimumType == JSON_TYPE_INTEGER || nMinimumType == JSON_TYPE_FLOAT)
-        {
-            string sSource = sFunction + " (" + sKeyword + ")";
-
-            if (JsonGetFloat(jInstance) >= JsonGetFloat(jMinimum))
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, jMinimum, sSource));
-            else
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource));
-        }
-
-        sKeyword = "exlusiveMinimum";
-        schema_scope_ReplaceSchemaPath(sKeyword);
-
-        int nExclusiveMinimumType = JsonGetType(jExclusiveMinimum);
-        if (nExclusiveMinimumType == JSON_TYPE_BOOL)
-        {
-            /// @note In early drafts, exclusiveMinimum is a boolean value and is dependent on minimum.  If
-            ///     minimum is missing, exclusiveMinimum is ignored, otherwise, it is evaluated independently.
-            if (nMinimumType == JSON_TYPE_INTEGER || nMinimumType == JSON_TYPE_FLOAT)
-            {
-                string sSource = sFunction + " (" + sKeyword + ")(bool)";
-
-                if (jExclusiveMinimum == JSON_TRUE && JsonGetFloat(jInstance) > JsonGetFloat(jMinimum) ||
-                    jExclusiveMinimum == JSON_FALSE && JsonGetFloat(jInstance) >= JsonGetFloat(jMinimum))
-                {
-                    jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, jExclusiveMinimum, sSource));
-                }
-                else
-                    jaOutput = JsonArrayInsert(jaOutput, schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource));
-            }
-        }
-        else if (nExclusiveMinimumType == JSON_TYPE_INTEGER || nExclusiveMinimumType == JSON_TYPE_FLOAT)
-        {
-            string sSource = sFunction + " (" + sKeyword + ")";
-
-            /// @note In later drafts, exclusiveMinimum is a number and is validated independently of minimum.
-            if (JsonGetFloat(jInstance) > JsonGetFloat(jExclusiveMinimum))
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, jExclusiveMinimum, sSource));
-            else
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource));
-        }
-
-        schema_scope_PopSchemaPath();
-    }
-
-    return jaOutput;
-}
-
-/// @brief Validates the number "maximum" and "exclusiveMaximum" keywords.
-/// @param jInstance The instance to validate.
-/// @param jMaximum The schema value for "maximum".
-/// @param jExclusiveMaximum The schema value for "exclusiveMaximum".
-/// @returns An output array containing the validation results(s).
-json schema_validate_Maximum(json jInstance, json jMaximum, json jExclusiveMaximum)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    json jaOutput = JsonArray();
-
-    string sFunction = __FUNCTION__;
-
-    /// @note maximum and exclusiveMaximum are ignored for non-number instances.
-    int nInstanceType = JsonGetType(jInstance);
-    if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
-    {
-        string sKeyword;
-        if (JsonGetType(jMaximum) != JSON_TYPE_NULL)
-            sKeyword = "maximum";
-        else if (JsonGetType(jExclusiveMaximum) != JSON_TYPE_NULL)
-            sKeyword = "exclusiveMaximum";
-
-        schema_scope_PushSchemaPath(sKeyword);
-        jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, JsonString("keyword ignored due to instance type"), sFunction));
-        schema_scope_PopSchemaPath();
-    }
-    else
-    {
-        string sKeyword = "maximum";
-        schema_scope_PushSchemaPath(sKeyword);
-
-        string sSource = sFunction + " (" + sKeyword + ")";
-
-        /// @note Validate maximum independently from exclusiveMaximum.
-        int nMaximumType = JsonGetType(jMaximum);
-        if (nMaximumType == JSON_TYPE_INTEGER || nMaximumType == JSON_TYPE_FLOAT)
-        {
-            if (JsonGetFloat(jInstance) <= JsonGetFloat(jMaximum))
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, jMaximum, sSource));
-            else
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource));
-        }
-
-        sKeyword = "exclusiveMaximum";
-        schema_scope_ReplaceSchemaPath(sKeyword);
-
-        int nExclusiveMaximumType = JsonGetType(jExclusiveMaximum);
-        if (nExclusiveMaximumType == JSON_TYPE_BOOL)
-        {
-            /// @note In early drafts, exclusiveMaximum is a boolean value and is dependent on maximum.  If
-            ///     maximum is missing, exclusiveMaximum is ignored, otherwise, it is evaluated independently.
-            if (nMaximumType == JSON_TYPE_INTEGER || nMaximumType == JSON_TYPE_FLOAT)
-            {
-                string sSource = sFunction + " (" + sKeyword + ")(bool)";
-                
-                if (jExclusiveMaximum == JSON_TRUE && JsonGetFloat(jInstance) < JsonGetFloat(jMaximum) ||
-                    jExclusiveMaximum == JSON_FALSE && JsonGetFloat(jInstance) <= JsonGetFloat(jMaximum))
-                {
-                    jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, jExclusiveMaximum, sSource));
-                }
-                else
-                    jaOutput = JsonArrayInsert(jaOutput, schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource));
-            }
-        }
-        else if (nExclusiveMaximumType == JSON_TYPE_INTEGER || nExclusiveMaximumType == JSON_TYPE_FLOAT)
-        {
-            /// @note In later drafts, exclusiveMaximum is a number and is validated independently of maximum.
-            if (JsonGetFloat(jInstance) < JsonGetFloat(jExclusiveMaximum))
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetAnnotation(joOutputUnit, sKeyword, jExclusiveMaximum, sSource));
-            else
-                jaOutput = JsonArrayInsert(jaOutput, schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource));
-        }
-
-        schema_scope_PopSchemaPath();
-    }
-
-    return jaOutput;
-}
-
-/// @todo
 ///     [ ] See if we can combine all (or most of) the assertions that require numeric comparison
 ///         like minimum, maximum, exclusiveMinimum, exclusiveMaximum, minLength, maxLength,
 ///         multipleOf, etc.  See chart below
@@ -2356,68 +2151,6 @@ json schema_validate_Assertion(string sKeyword, json jInstance, string sOperator
 /// @todo
 ///     [ ] end experiment for assertions ----------------------------------------------------------------------
 
-/// @private Validates the number "multipleOf" keyword.
-/// @param jInstance The instance to validate.
-/// @param jSchema The schema value for "multipleOf".
-/// @returns An output object containing the validation result.
-json schema_validate_MultipleOf(json jInstance, json jSchema)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    string sSource = __FUNCTION__;
-    string sKeyword = "multipleOf";
-
-    /// @note multipleOf is ignored for non-number instances.
-    int nInstanceType = JsonGetType(jInstance);
-    if (nInstanceType != JSON_TYPE_INTEGER && nInstanceType != JSON_TYPE_FLOAT)
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, JsonString("keyword ignored due to instance type"), sSource);
-
-    float fMultiple = JsonGetFloat(jInstance) / JsonGetFloat(jSchema);
-    if (fabs(fMultiple - IntToFloat(FloatToInt(fMultiple))) < 0.00001)
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-    else
-        return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-}
-
-/// @private Validates the array "minItems" keyword.
-/// @param jaInstance The instance to validate.
-/// @param jSchema The schema value for "minItems".
-/// @returns An output object containing the validation result.
-json schema_validate_MinItems(json jaInstance, json jSchema)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    string sSource = __FUNCTION__;
-    string sKeyword = "minItems";
-
-    /// @note minItems is ignored for non-array instances.
-    if (JsonGetType(jaInstance) != JSON_TYPE_ARRAY)
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, JsonString("keyword ignored due to instance type"), sSource);
-
-    if (JsonGetLength(jaInstance) >= JsonGetInt(jSchema))
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-    else
-        return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-}
-
-/// @private Validates the array "maxItems" keyword.
-/// @param jaInstance The instance to validate.
-/// @param jSchema The schema value for "maxItems".
-/// @returns An output object containing the validation result.
-json schema_validate_MaxItems(json jaInstance, json jSchema)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    string sSource = __FUNCTION__;
-    string sKeyword = "maxItems";
-
-    /// @note maxItems is ignored for non-array instances.
-    if (JsonGetType(jaInstance) != JSON_TYPE_ARRAY)
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, JsonString("keyword ignored due to instance type"), sSource);
-
-    if (JsonGetLength(jaInstance) <= JsonGetInt(jSchema))
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-    else
-        return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-}
-
 /// @private Validates the array "uniqueItems" keyword.
 /// @param jaInstance The instance to validate.
 /// @param jSchema The schema value for "uniqueItems".
@@ -2441,51 +2174,19 @@ json schema_validate_UniqueItems(json jaInstance, json jSchema)
         return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
 }
 
-/// @todo
-///     [ ] Move this to reference section
-///     [ ] This comment about pseudo-arrays is wrong, no documentations allows this.  Leave
-///         the funtion, but fix the comments.  Make is public?
+/// @brief `prefixItems`.  The value of this keyword must be a non-empty array of valid schema.  `prefixItems`
+///     is a tuple validation, comparing each item in the instance array against the corresponding schema
+///     item from the `prefixItems` array.
+/// @note If prefixItems.length > instance.length, excess prefixItem schema are ignored.
+/// @note If prefixItems.length < instance.length, excess instance items are not evaluated by `prefixItems`.
 
-/// @private Foundational documents allow javascript pseudo-arrays to be used in json and
-///     treated as json arrays for validation purposes.  This function takes a valid json
-///     object and checks if it appears to be a javascript pseudo-array.  If so, the
-///     pseudo-array is converted to a valid json array.
-/// @param jo Javascript pseudo-array.
-/// @returns Json array containing the contents of the javascript pseudo-array.
-json schema_reference_ObjectToArray(json jo)
-{
-    json jaKeys = JsonObjectKeys(jo);
-    if (JsonFind(jaKeys, JsonString("length")) == JsonNull())
-        return JsonNull();
-
-    int nLength = JsonGetInt(JsonObjectGet(jo, "length"));
-    if (nLength < 0)
-        return JsonNull();
-
-    if (JsonGetLength(jaKeys) != nLength + 1)
-        return JsonNull();
-
-    if (nLength == 0)
-        return JsonArray();
-    
-    json ja = JsonArray();
-    int i; for (; i < nLength; i++)
-    {
-        if (JsonFind(jaKeys, JsonString(IntToString(i))) == JsonNull())
-            return JsonNull();
-
-        ja = JsonArrayInsert(ja, JsonObjectGet(jo, IntToString(i)));
-    }
-
-    return ja;
-}
-
-/// @todo
-///     [ ] move this to a ref/scope?
-///     [ ] Move all of these into their individual functions to allow independent evaluation
-///         and use the annotation system to move data around.
-///     [ ] the keyword needs to be pushed into schema_scope_PushSchemaPath in the calling function
-
+/// @brief items.  When the value of this keyword is an array, `items` is a tuple validation, comparing each
+///     item in the instance array against the corresponding schema item in the `items` array.
+/// @note If items.length > instance.length, excess `items` schema are ignored.
+/// @note If items.length < instance.length, excess instance items are not evaluated by `items`.
+/// @note Only `items` as an array is handled here since the validation is equivalent to validating
+///     `prefixItems`.  For validation when `items` is a schema, see the code section for
+///     `items`/`additionalItems` below.
 json schema_validate_Tuple(json jaInstance, json jSchema, int bAnnotate = FALSE)
 {
     schema_debug_EnterFunction(__FUNCTION__);
@@ -2517,15 +2218,23 @@ json schema_validate_Tuple(json jaInstance, json jSchema, int bAnnotate = FALSE)
         }
     }
 
+    schema_debug_ExitFunction(__FUNCTION__);
     return joOutputUnit;
 }
 
-/// @brief this will be the uniform item validator, which is slightly dependent on
-///     the tuple validator is that it needs to know the length of the prefixItems/items
-///     array to correctly evaluated.
-/// items? bAnnotate = true
-/// additionalItems? bAnnotatino = false
-/// [ ] push keyword before calling this function
+/// @brief items.  The value of `items` must be a valid schema.  Validation only occurs against
+///     instance items that have not been previously evaluated by `prefixItems`.  For all reamining
+///     unevaluated instance items, each instance item is validated against the `items` schema.
+/// @note If prefixItems.length > instance.length, `items` schema is ignored.
+
+/// @brief additionalItems.  The value of `additionalItems` must be a valid schema.  Validation
+///     only occurs against instance items that have not been previously evaluated by `items` (array).
+///     For all remaining unevaluated instance items, each instance item is validated against the
+///     `additionalItems` schema.
+/// @note If additionalItems = true, all unevaluated instance items are validated.
+/// @note If additionalItems = false, validation of unevaluated items is disallowed and the instace
+///     fails validation.
+/// @note additionalItems = {} is functionally identical to additionlItems = true.
 json schema_validate_UniformItem(json jaInstance, json jSchema, int nTupleLength, int bAnnotate = FALSE)
 {
     schema_debug_EnterFunction(__FUNCTION__);
@@ -2582,41 +2291,102 @@ json schema_validate_UniformItem(json jaInstance, json jSchema, int nTupleLength
         }
     }
 
+    schema_debug_ExitFunction(__FUNCTION__);
     return joOutputUnit;
 }
 
-/// @todo
-///    [ ] push keyword before calling this function
-json schema_validate_Contains(json jaInstance, json jContains, int bAnnotate)
+/// @brief contains.  The value of `contains` must be a valid schema.  Validation occurs
+///     against all instance items, including those previously evaluated by `items` and
+///     `prefixItems`.  An instance array is valid against `contains` if at least one of the
+///     instance array's items is valid against the `contains` schema.
+/// @note If contains = true, the instance array is considered valid if the instance array
+///     has at least `minContains` items and no more than `maxContains` items.  All instance
+///     items are considered evaluated.
+/// @note If contains = false, the instance array is considered invalid (unless minContains = 0)
+///     and no instance items are considered evaluated.
+/// @note Instance items which successfully validate against the `contains` schema are
+///     considered evaluated; instance items that do not validate against the `contains`
+///     schema are not considered evaluated.
+
+/// @brief minContains.  The value of `minContains` must be a non-negative integer.  This
+///     keyword is ignored if `contains` is not present in the same schema object.  To
+///     validate against `minContains`, the instance array must have at least `minContains`
+///     items that are valid against the `contains` schema.
+/// @note If minContains = 0, the instance array is considered valid against the `contains`
+///     schema, even if no instance items can be validated against the `contains` schema or
+///     if the instance array is empty.
+/// @note If `minContains` is ommitted, a default value of 1 is used.
+
+/// @brief maxContains.  The value of `maxContains` must be a non-negative integer.  This
+///     keyword is ignored if `contains` is not present in the same schema object.  To
+///     validate against `maxContains`, the instance array must have no more than `maxContains`
+///     items that are valid against the `contains` schema.
+/// @note If maxContains = 0 && instance.length = 0, the instance is considered valid against
+///     the `contains` schema.
+json schema_validate_Contains(json jaInstance, json jContains, json jiMinContains, json jiMaxContains, int bAnnotate)
 {
     schema_debug_EnterFunction(__FUNCTION__);
-
-    json joOutputUnit = schema_output_GetOutputUnit();
-    json jaEvaluatedItems = JsonArray();
-
+    json jaOutput = JsonArray();
     string sSource = __FUNCTION__;
 
-    int nInstanceLength = JsonGetLength(jaInstance);
-    if (nInstanceLength > 0)
+    string sKeyword = "contains";
+    nKeywordType = JsonGetType(jContains);
+    if (nKeywordType != JSON_TYPE_NULL)
     {
-        if (jContains == JsonObject())
+        schema_scope_PushSchemaPath(sKeyword);
+
+        json joOutputUnit = schema_output_GetOutputUnit();
+        json jaEvaluatedItems = JsonArray();
+        
+        int nMinContains = JsonGetType(jiMinContains) != JSON_TYPE_NULL ? JsonGetInt(jiMinContains) : -1;
+        int nMaxContains = JsonGetType(jiMaxContains) != JSON_TYPE_NULL ? JsonGetInt(jiMaxContains) : -1;
+
+        int nInstanceLength = JsonGetLength(jaInstance);
+        
+        if (jContains == JsonObject() || nMinContains == 0)
             jContains = JSON_TRUE;
 
-        int nKeywordType = JsonGetType(jContains);
         if (nKeywordType == JSON_TYPE_BOOL)
         {
+            /// @note The following conditions satisfy validation for contains = true
+            ///     and contains = false
+            if ((
+                (nMinContains == 0) ||
+                (nMaxContains == 0 && nInstanceLength == 0)
+                ) ||
+                (
+                    /// @note If contains = true, the following additional conditions satisfy validation:
+                    ///     - instance.length >= 1; `[min|max]Contains` is not specified
+                    ///     - minContains <= instance.length <= maxContains
+                    ///     - minContains <= instance.length; `maxContains` is not specified
+                    ///     - 1 <= instance.length <= maxContains; `minContains` is not specified
+                    (jContains == JSON_TRUE && 
+                        (
+                            (nInstanceLength >= 1 && nMinContains == -1 && nMaxContains == -1) ||
+                            (nMinContains > -1 && nMaxContains > -1 && nInstanceLength >= nMinContains && nInstanceLength <= nMaxContains) ||
+                            (nMinContains > -1 && nMaxContains == -1 && nInstanceLength >= nMinContains) ||
+                            (nMaxContains > -1 && nMinContains == -1 && nInstanceLength >= 1 && nInstanceLength <= nMaxContains)
+                        )
+                    )
+                )
+            )
+            {
+                if (nInstanceLength > 0)
+                {
+                    int i; for (; i < nInstanceLength; i++)
+                        jaEvaluatedItems = JsonArrayInsert(jaEvaluatedItems, JsonInt(i));
+                }
+            }
+
             json joItemOutputUnit = schema_output_GetOutputUnit();
             int i; for (i = 0; i < nInstanceLength; i++)
             {
                 schema_scope_PushInstancePath(IntToString(i));
 
-                if (jContains == JSON_TRUE)
+                if (JsonGetLength(jaEvaluatedItems) > 0)
                     joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, joItemOutputUnit, sSource);
                 else
                     joOutputUnit = schema_output_InsertError(joOutputUnit, joItemOutputUnit, sSource);
-
-                if (bAnnotate)
-                    jaEvaluatedItems = JsonArrayInsert(jaEvaluatedItems, JsonInt(i));
 
                 schema_scope_PopInstancePath();
             }
@@ -2631,401 +2401,63 @@ json schema_validate_Contains(json jaInstance, json jContains, int bAnnotate)
                 if (schema_output_GetValid(joResult))
                     jaEvaluatedItems = JsonArrayInsert(jaEvaluatedItems, JsonInt(i));
 
-                /// @note An instance item that fails validations of the `contains` schema does not cause
-                ///     the instance array to fail validation.
+                /// @note A instance item that fails validations of a `contains` schema does not cause
+                ///     the instance array to fail validation.  Validation results for `contains` schema
+                ///     validation are always annotations.
                 joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, joResult, sSource);
-
                 schema_scope_PopInstancePath();
             }
-        }
-    }
 
-    /// @note The contains annotations is required to be present even if the resulting array of values is
-    ///     empty.  This is to ensure that `minContains` and `maxContains` can function independently at any
-    ///     point after `contains` is evaluated, if present.
-    if (bAnnotate)
-    {
-        string sAnnotationKey = JsonGetString(JsonObjectGet(jaAnnotationKeys, __FUNCTION__));
-        joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sAnnotationKey, jaEvaluatedItems, sSource);
-    }
-
-    schema_debug_ExitFunction(__FUNCTION__);
-    return schema_output_SetValid(joOutputUnit, JsonGetLength(jaEvaluatedItems) > 0);
-}
-
-/// @private Validates interdependent array keywords "prefixItems", "items", "contains",
-///     "minContains", "maxContains", "unevaluatedItems".
-/// @param jaInstance The array instance to validate.
-/// @param jaPrefixItems The schema value for "prefixItems".
-/// @param jItems The schema value for "items"
-/// @param joContains The schema value for "contains".
-/// @param jiMinContains The schema value for "minContains".
-/// @param jiMaxContains The schema value for "maxContains".
-/// @param jAdditionalItems The schema value for "additionalItems".
-/// @returns An output object containing the validation result.
-json schema_validate_Array(
-    json jaInstance,
-    json jaPrefixItems,
-    json jItems,
-    json joContains,
-    json jiMinContains,
-    json jiMaxContains,
-    json jAdditionalItems
-)
-{
-    schema_debug_EnterFunction(__FUNCTION__);
-
-    json jaOutput = JsonArray();
-    string sFunction = __FUNCTION__;
-
-    /// @todo
-    ///     [ ] this probably needs to be moved so we know which keyword we're dealing with first?  Otherwise,
-    ///         the visit will be useless for the user and provide no traversal information in the result.
-    ///     [ ] on second thought, move this out to the calling function since they'll have access to the keywords
-    ///         readily without havign to pass another argument
-    if (JsonGetType(jaInstance) != JSON_TYPE_ARRAY)
-        return schema_output_SetAnnotation(schema_output_GetOutputUnit(__FUNCTION__), "instance", JsonString("not evaluated"), sFunction);
-    
-    string sAnnotationKey = "evaluatedItems";
-    int nInstanceLength = JsonGetLength(jaInstance);
-
-    /// @note When an instance item is evaluated by any keyword method, it must be marked as evaluated to
-    ///     ensure `unevaluatedItems` only evaluates truly unevaluated items.  To track evaluated indexes,
-    ///     create an array of all instance indexes.  This array will not be modified, only used to compare
-    ///     the array of aggregated evaluated items against.
-    json jaInstanceItems = JsonArray();
-    if (nInstanceLength > 0)
-    {
-        int i; for (; i < nInstanceLength; i++)
-            jaInstanceItems = JsonArrayInsert(jaInstanceItems, JsonInt(i));
-    }
-
-    /// @brief `prefixItems`.  The value of this keyword must be a non-empty array of valid schema.  `prefixItems`
-    ///     is a tuple validation, comparing each item in the instance array against the corresponding schema
-    ///     item from the `prefixItems` array.
-    /// @note If prefixItems.length > instance.length, excess prefixItem schema are ignored.
-    /// @note If prefixItems.length < instance.length, excess instance items are not evaluated by `prefixItems`.
-
-    /// @brief items.  When the value of this keyword is an array, `items` is a tuple validation, comparing each
-    ///     item in the instance array against the corresponding schema item in the `items` array.
-    /// @note If items.length > instance.length, excess `items` schema are ignored.
-    /// @note If items.length < instance.length, excess instance items are not evaluated by `items`.
-    /// @note Only `items` as an array is handled here since the validation is equivalent to validating
-    ///     `prefixItems`.  For validation when `items` is a schema, see the code section for
-    ///     `items`/`additionalItems` below.
-
-    // This sucks, but I'm going to need the draft version because of some random renaming of keywords
-    /// that occurred between draft-7 -> 2019-09 -> 2020-12
-    int nDraft = JsonGetInt(schema_scope_GetSchema());
-
-    json jSchema = JsonNull();
-    string sKeyword;
-    int bAnnotate = FALSE;
-
-    int nItemsType = JsonGetType(jItems);
-    if (nItemsType == JSON_TYPE_ARRAY)
-    {
-        jSchema = jItems;
-        sKeyword = "items";
-        bAnnotate = nDraft == SCHEMA_DRAFT_2019_09;
-    }
-    else if (JsonGetType(jaPrefixItems) == JSON_TYPE_ARRAY)
-    {
-        jSchema = jaPrefixItems;
-        sKeyword = "prefixItems";
-        bAnnotate = TRUE;
-    }
-
-    int nSchemasLength = JsonGetLength(jSchema);
-    if (nSchemasLength > 0)
-    {
-        schema_scope_PushSchemaPath(sKeyword);
-
-        json jaEvaluatedItems = JsonArray();
-
-        string sSource = sFunction + " (" + sKeyword + ")";
-        json joOutputUnit = schema_output_GetOutputUnit(sKeyword);
-       
-        int i; for (; i < nSchemasLength && i < nInstanceLength; i++)
-        {
-            schema_scope_PushSchemaPath(IntToString(i));
-            schema_scope_PushInstancePath(IntToString(i));
-
-            json joTupleSchema = JsonArrayGet(jSchema, i);
-            json joResult = schema_core_Validate(JsonArrayGet(jaInstance, i), joTupleSchema);
-
-            joOutputUnit = schema_output_InsertResult(joOutputUnit, joResult, sSource);
-            jaEvaluatedItems = JsonArrayInsert(jaEvaluatedItems, JsonInt(i));
-
-            schema_scope_PopInstancePath();
-            schema_scope_PopSchemaPath();
-        }
-
-        if (bAnnotate)
-            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sAnnotationKey, jaEvaluatedItems, sSource);
-
-        jaOutput = JsonArrayInsert(jaOutput, joOutputUnit);
-        schema_scope_PopSchemaPath();
-    }
-
-    /// @brief additionalItems.  The value of `additionalItems` must be a valid schema.  Validation
-    ///     only occurs against instance items that have not been previously evaluated by `items` (array).
-    ///     For all remaining unevaluated instance items, each instance item is validated against the
-    ///     `additionalItems` schema.
-    /// @note If additionalItems = true, all unevaluated instance items are validated.
-    /// @note If additionalItems = false, validation of unevaluated items is disallowed and the instace
-    ///     fails validation.
-    /// @note additionalItems = {} is functionally identical to additionlItems = true.
-    /// @note additionalItems does not produce annotations.
-
-    /// @todo
-    ///     [ ] move this to a schema_validate_Tuple() function to make the system for
-    ///         efficient?
-
-    jSchema = JsonNull();
-    json jTuple = JsonNull();
-    if (nItemsType == JSON_TYPE_BOOL || nItemsType == JSON_TYPE_OBJECT)
-    {
-        jSchema = jItems;
-        jTuple = jaPrefixItems;
-        sKeyword = "items";
-        bAnnotate = TRUE;
-    }
-    else if (JsonGetType(jAdditionalItems) != JSON_TYPE_NULL)
-    {
-        jSchema = jAdditionalItems;
-        jTuple = jItems;
-        sKeyword = "additionalItems";
-        bAnnotate = FALSE;
-    }
-
-    int nKeywordType = JsonGetType(jSchema);
-    if (nKeywordType == JSON_TYPE_BOOL || nKeywordType == JSON_TYPE_OBJECT)
-    {
-        string sSource = sFunction + " (" + sKeyword + ")";
-        json joOutputUnit = schema_output_GetOutputUnit();
-        json jaEvaluatedItems = JsonArray();
-
-        int nIndex = (JsonGetLength(jTuple) < nInstanceLength) ? JsonGetLength(jTuple) : -1;
-        if (nIndex >= 0 && nInstanceLength > 0)
-        {
-            if (nKeywordType == JSON_TYPE_BOOL)
+            int nMatches = JsonGetLength(jaEvaluatedItems);
+            if (
+                (nMatches < (nMinContains == -1 ? 1 : nMinContains)) ||
+                (nMaxContains != -1 && nMatches > nMaxContains)
+            )
             {
-                schema_scope_PushSchemaPath(sKeyword);
-
-                json joOutput = schema_output_GetOutputUnit();
-                if (jSchema == JSON_TRUE)
-                    joOutput = schema_output_SetAnnotation(joOutput, sKeyword, jSchema, sSource);
-                else if (jSchema == JSON_FALSE)
-                    joOutput = schema_output_SetError(joOutput, schema_output_GetErrorMessage(sKeyword), sSource);
-                
-                int i; for (i = nIndex; i < nInstanceLength; i++)
-                {
-                    schema_scope_PushInstancePath(IntToString(i));
-
-                    if (jSchema == JSON_TRUE)
-                        joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, joOutput, sSource);
-                    else
-                        joOutputUnit = schema_output_InsertError(joOutputUnit, joOutput, sSource);
-
-                    if (bAnnotate)
-                        jaEvaluatedItems = JsonArrayInsert(jaEvaluatedItems, JsonInt(i));
-
-                    schema_scope_PopInstancePath();
-                }
-                    
-                schema_scope_PopSchemaPath();
-            }
-            else if (nKeywordType == JSON_TYPE_OBJECT)
-            {
-                schema_scope_PushSchemaPath(sKeyword);
-
-                if (jSchema == JsonObject())
-                    joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-                int i; for (i = nIndex; i < nInstanceLength; i++)
-                {
-                    schema_scope_PushInstancePath(IntToString(i));
-
-                    json jInstanceItem = JsonArrayGet(jaInstance, i);
-                    json joResult = schema_core_Validate(jInstanceItem, jSchema);
-
-                    joOutputUnit = schema_output_InsertResult(joOutputUnit, joResult, sSource);
-
-                    if (bAnnotate)
-                        jaEvaluatedItems = JsonArrayInsert(jaEvaluatedItems, JsonInt(i));
-
-                    schema_scope_PopInstancePath();
-                }
-
-                schema_scope_PopSchemaPath();
+                joOutputUnit = schema_output_SetValid(joOutputUnit, FALSE);
             }
         }
 
         if (bAnnotate)
+        {
+            string sAnnotationKey = JsonGetString(JsonObjectGet(jaAnnotationKeys, __FUNCTION__));
             joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sAnnotationKey, jaEvaluatedItems, sSource);
-
-        jaOutput = JsonArrayInsert(jaOutput, joOutputUnit);
-    }
-
-    /// @brief contains.  The value of `contains` must be a valid schema.  Validation occurs
-    ///     against all instance items, including those previously evaluated by `items` and
-    ///     `prefixItems`.  An instance array is valid against `contains` if at least one of the
-    ///     instance array's items is valid against the `contains` schema.
-    /// @note If contains = true, the instance array is considered valid if the instance array
-    ///     has at least `minContains` items and no more than `maxContains` items.  All instance
-    ///     items are considered evaluated.
-    /// @note If contains = false, the instance array is considered invalid (unless minContains = 0)
-    ///     and no instance items are considered evaluated.
-    /// @note Instance items which successfully validate against the `contains` schema are
-    ///     considered evaluated; instance items that do not validate against the `contains`
-    ///     schema are not considered evaluated.
-
-    /// @brief minContains.  The value of `minContains` must be a non-negative integer.  This
-    ///     keyword is ignored if `contains` is not present in the same schema object.  To
-    ///     validate against `minContains`, the instance array must have at least `minContains`
-    ///     items that are valid against the `contains` schema.
-    /// @note If minContains = 0, the instance array is considered valid against the `contains`
-    ///     schema, even if no instance items can be validated against the `contains` schema.
-    /// @note If `minContains` is ommitted, a default value of 1 is used.
-
-    /// @brief maxContains.  The value of `maxContains` must be a non-negative integer.  This
-    ///     keyword is ignore if `contains` is not present in the same schema object.  To
-    ///     validate against `maxContains`, the instance array must have no more than `maxContains`
-    ///     items that are valid against the `contains` schema.
-
-    sKeyword = "contains";
-    nKeywordType = JsonGetType(joContains);
-    if (nKeywordType != JSON_TYPE_NULL)
-    {
-        string sSource = sFunction + " (" + sKeyword + ")";
-        bAnnotate = nDraft >= SCHEMA_DRAFT_2019_09;
-
-        schema_scope_PushSchemaPath(sKeyword);
-
-        json joOutputUnit = schema_output_GetOutputUnit();
-        json jaEvaluatedItems = JsonArray();
-        
-        int nMatches;
-        int nMinContains = JsonGetType(jiMinContains) != JSON_TYPE_NULL ? JsonGetInt(jiMinContains) : -1;
-        int nMaxContains = JsonGetType(jiMaxContains) != JSON_TYPE_NULL ? JsonGetInt(jiMaxContains) : -1;
-        
-        if (nKeywordType == JSON_TYPE_BOOL)
-        {
-            if (joContains == JSON_TRUE)
-            {
-                /// @note If contains = true, the following conditionals satsify validation:
-                ///     - instance.length >= 1; `[min|max]Contains` is not specified
-                ///     - minContains = 0
-                ///     - maxContains = 0 && instance.length = 0
-                ///     - minContains <= instance.length <= maxContains
-                ///     - minContains <= instance.length; `maxContains` is not specified
-                ///     - 1 <= instance.length <= maxContains; `minContains` is not specified
-                if (
-                    (nInstanceLength >= 1 && nMinContains == -1 && nMaxContains == -1) ||
-                    (nMinContains == 0) ||
-                    (nMaxContains == 0 && nInstanceLength == 0) ||
-                    (nMinContains > -1 && nMaxContains > -1 && nInstanceLength >= nMinContains && nInstanceLength <= nMaxContains) ||
-                    (nMinContains > -1 && nMaxContains == -1 && nInstanceLength >= nMinContains) ||
-                    (nMaxContains > -1 && nMinContains == -1 && nInstanceLength >= 1 && nInstanceLength <= nMaxContains)
-                )
-                {
-                    joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sKeyword, joContains, sSource);
-                    nMatches = nInstanceLength;
-                    jaEvaluatedItems = jaInstanceItems;
-                }
-                else
-                    joOutputUnit = schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-            }
-            else if (joContains == JSON_FALSE)
-            {
-                /// @note If contains = false, the following conditionals satisfy validation:
-                ///     - minContains = 0
-                ///     - maxContains = 0 && instance.length = 0
-                if (
-                    (nMinContains == 0) ||
-                    (nMaxContains == 0 && nInstanceLength == 0)
-                )
-                {
-                    joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sKeyword, joContains, sSource);
-                    nMatches = nInstanceLength;
-                    jaEvaluatedItems = jaInstanceItems;
-                }
-                else
-                    joOutputUnit = schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-            }
-        }
-        else if (nKeywordType == JSON_TYPE_OBJECT)
-        {
-            if (nMinContains == 0)
-                joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sKeyword, joContains, sSource);
-            else
-            {
-                int i; for (; i < nInstanceLength; i++)
-                {
-                    schema_scope_PushInstancePath(IntToString(i));
-
-                    json joResult = schema_core_Validate(JsonArrayGet(jaInstance, i), joContains);
-                    if (schema_output_GetValid(joResult))
-                    {
-                        nMatches++;
-                        jaEvaluatedItems = JsonArrayInsert(jaEvaluatedItems, JsonInt(i));
-                    }
-
-                    /// @note A instance item that fails validations of a `contains` schema does not cause
-                    ///     the instance array to fail validation.  Validation results for `contains` schema
-                    ///     validation are always annotations.
-                    joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, joResult, sSource);
-                    schema_scope_PopInstancePath();
-                }
-
-                if (
-                    (nMatches < (nMinContains == -1 ? 1 : nMinContains)) ||
-                    (nMaxContains != -1 && nMatches > nMaxContains)
-                )
-                {
-                    joOutputUnit = schema_output_SetValid(joOutputUnit, FALSE);
-                }
-            }
-        }
-
-        if (bAnnotate && JsonGetLength(jaEvaluatedItems) > 0)
-            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sAnnotationKey, jaEvaluatedItems, sSource);
-
-        jaOutput = JsonArrayInsert(jaOutput, joOutputUnit);
-
-        sKeyword = "minContains";
-        sSource = sFunction + " (" + sKeyword + ")";
-
-        nKeywordType = JsonGetType(jiMinContains);
-        if (nKeywordType == JSON_TYPE_INTEGER || nKeywordType == JSON_TYPE_FLOAT)
-        {
-            joOutputUnit = schema_output_GetOutputUnit();
-
-            if (nMatches >= JsonGetInt(jiMinContains))
-                joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sKeyword, jiMinContains, sSource);
-            else
-                joOutputUnit = schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-
-            jaOutput = JsonArrayInsert(jaOutput, joOutputUnit);
-        }
-
-        sKeyword = "minContains";
-        sSource = sFunction + " (" + sKeyword + ")";
-
-        nKeywordType = JsonGetType(jiMaxContains);
-        if (nKeywordType == JSON_TYPE_INTEGER || nKeywordType == JSON_TYPE_FLOAT)
-        {
-            joOutputUnit = schema_output_GetOutputUnit();
-
-            if (nMatches <= JsonGetInt(jiMaxContains))
-                joOutputUnit = schema_output_SetAnnotation(joOutputUnit, sKeyword, jiMaxContains);
-            else
-                joOutputUnit = schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword));
-
-            jaOutput = JsonArrayInsert(jaOutput, joOutputUnit);
         }
 
         schema_scope_PopSchemaPath();
+        jaOutput = JsonArrayInsert(jaOutput, joOutputUnit);
+
+        json jaKeywords = JsonParse("[
+            ""minContains"",
+            ""maxContains""
+        ]");
+
+        int i; for (; i < JsonGetLength(jaKeywords); i++)
+        {
+            string sOperator, sKeyword = JsonArrayGet(jaKeywords, i);
+
+            json jKeyword = JsonNull();
+            if (sKeyword == "minContains")
+            {
+                jKeyword = jiMinContains;
+                sOperator = ">=";
+            }
+            else
+            {
+                jKeyword == jiMaxContains;
+                sOperator = "<=";
+            }
+
+            nKeywordType = JsonGetType(jKeyword);
+            if (nKeywordType == JSON_TYPE_INTEGER || nKeywordType == JSON_TYPE_FLOAT)
+            {
+                schema_scope_PushSchemaPath(sKeyword);
+                joOutputUnit = schema_output_SetValid(schema_output_GetOutputUnit(), schema_validate_Assert(JsonGetLength(jaEvaluatedItems) * 1.0, sOperator, JsonGetFloat(jKeyword)));
+                schema_scope_PopSchemaPath();
+
+                jaOutput = JsonArrayInsert(jaOutput, joOutputUnit);
+            }
+        }
     }
 
     schema_debug_ExitFunction(__FUNCTION__);
@@ -3055,44 +2487,6 @@ json schema_validate_Required(json joInstance, json jSchema)
     }
 
     if (JsonGetLength(jaMissingProperties) > 0)
-        return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-    else
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-}
-
-/// @private Validates the object "minProperties" keyword.
-/// @param joInstance The object instance to validate.
-/// @param jSchema The schema value for "minProperties".
-/// @returns An output object containing the validation result.
-json schema_validate_MinProperties(json joInstance, json jSchema)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    string sSource = __FUNCTION__;
-    string sKeyword = "minProperties";
-    
-    if (JsonGetType(joInstance) != JSON_TYPE_OBJECT)
-        return joOutputUnit;
-    
-    if (JsonGetLength(joInstance) < JsonGetInt(jSchema))
-        return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
-    else
-        return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
-}
-
-/// @private Validates the object "maxProperties" keyword.
-/// @param joInstance The object instance to validate.
-/// @param jSchema The schema value for "maxProperties".
-/// @returns An output object containing the validation result.
-json schema_validate_MaxProperties(json joInstance, json jSchema)
-{
-    json joOutputUnit = schema_output_GetOutputUnit();
-    string sSource = __FUNCTION__;
-    string sKeyword = "minProperties";
-
-    if (JsonGetType(joInstance) != JSON_TYPE_OBJECT)
-        return joOutputUnit;
-
-    if (JsonGetLength(joInstance) > JsonGetInt(jSchema))
         return schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
     else
         return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
@@ -3948,101 +3342,20 @@ json schema_core_Validate(json jInstance, json joSchema)
     }
 
     int HANDLED_CONDITIONAL = 0x01;
-    int HANDLED_ARRAY = 0x02;
+    int HANDLED_CONTAINS = 0x02;
     int HANDLED_OBJECT = 0x04;
-    int HANDLED_MINIMUM = 0x08;
-    int HANDLED_MAXIMUM = 0x10;
+    //int HANDLED_MINIMUM = 0x08;
+    //int HANDLED_MAXIMUM = 0x10;
     int nHandledFlags;
 
     int i; for (; i < JsonGetLength(jaSchemaKeys); i++)
     {
-        /// @todo
-        ///     [ ] building the new routing function here
-        if (FALSE)
-        {
-            string sKey = JsonGetString(JsonArrayGet(jaSchemaKeys, i));
-            json jKeySchema = JsonObjectGet(joSchema, sKey);
-            int nKeySchemaType = JsonGetType(jKeySchema);
-
-            int nSchemaType = JsonGetType(joSchema);
-
-            /// @todo
-            ///     [ ] push schema path
-
-            if (sKey == "prefixItems")
-                jResult = schema_validate_Tuple(jInstance, jKeySchema);
-            else if (sKey == "items")
-            {
-                if (nSchemaType == JSON_TYPE_ARRAY)
-                    jResult = schema_validate_Tuple(jInstance, jKeySchema);
-                else if (nSchemaType == JSON_TYPE_OBJECT || nSchemaType == JSON_TYPE_BOOL)
-                    jResult = schema_validate_UniformItem(jInstance, jKeySchema);
-            }
-            else if (sKey == "contains")
-            {
-                /// @todo
-                ///     [ ] check if contains has already been run by another keyword
-                ///     [ ] if so, continue;
-            }
-                jResult = schema_validate_Contains(jInstance, jKeySchema);
-            else if (sKey == "minContains" || sKey == "maxContains")
-            {
-                /// @todo
-                ///     [ ] check if contains has run, if not run it
-                ///     [ ] retrieve the contains annotation
-                ///     [ ] send annotation length to numeric comparison function (assertion)
-                ///     [ ] how do we add the contains, maybe via the array-result methodology?
-
-            }
-            else if (sKey == "additionalItems")
-                jResult = schema_validate_UniformItem(jInstance, jKeySchema);
-            else if (sKey == "minimum")
-                jResult = schema_validate_Assertion(sKey, jInstance, ">=", jKeySchema);
-            else if (sKey == "maximum")
-                jResult = schema_validate_Assertion(sKey, jInstance, "<=", jKeySchema);
-            else if (sKey == "exclusiveMinimum" || sKey == "exclusiveMaximum")
-            {
-                string sOperator = sKey == "exclusiveMinimum" ? ">" : "<";
-
-                if (nKeySchemaType == JSON_TYPE_INTEGER || nKeySchemaType == JSON_TYPE_FLOAT)
-                    jResult = schema_validate_Assertion(sKey, jInstance, sOperator, sKeySchema);
-                else if (nKeySchemaType == JSON_TYPE_BOOL && jKeySchema == JSON_TRUE)
-                {
-                    string sKeyword = sKey == "exclusiveMinimum" ? "minimum" : "maximum";
-
-                    json jKeyword = JsonObjectGet(joSchema, sKeyword);
-                    int nKeywordType = JsonGetType(jKeyword);
-                    if (nKeywordType == JSON_TYPE_INTEGER || nKeywordType == JSON_TYPE_FLOAT)
-                        jResult = schema_validate_Assertion(sKey, jInstance, sOperator, jKeyword);
-                }
-            }
-            else if (sKey == "minItems")
-                jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), ">=", jKeySchema);
-            else if (sKey == "maxItems")
-                jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), "<=", jKeySchema);
-            else if (sKey == "minLength")
-                jResult = schema_validate_Assertion(sKey, GetStringLength(JsonGetString(jInstance)), ">=", jKeySchema);
-            else if (sKey == "maxLength")
-                jResult = schema_validate_Assertion(sKey, GetStringLength(JsonGetString(jInstance)), "<=", jKeySchema);
-            else if (sKey == "minProperties")
-                jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), ">=", jKeySchema);
-            else if (sKey == "maxProperties")
-                jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), "<=", jKeySchema);
-            else if (sKey == "multipleOf")
-                jResult = schema_validate_Assertion(sKey, jInstance, "%", jKeySchema);
-
-            /// @todo
-            ///     [ ] some of these will be much easier to implement as a combined function, such as
-            ///         schema_validate_Object() and schema_validate_If() (change to schema_validate_Conditional() ?)
-            ///         so let's keep them that way.  Another might be contains/minContains/maxContains.  Others
-            ///         are easily combined, so let's move them out, like any numeric comparison keyword (assertion)
-            ///         like maximum, minimum, minLength, maxLength, etc., but we still need to do instance type checking
-            ///         first to ensure we're falling back to validation when the instance type is incorrect for the
-            ///         evaluation at hand.
-        }
-
         string sKey = JsonGetString(JsonArrayGet(jaSchemaKeys, i));
-        schema_debug_Message("sKey = " + HexColorString(sKey, COLOR_MAGENTA));
+        json jKeySchema = JsonObjectGet(joSchema, sKey);
+        int nKeySchemaType = JsonGetType(jKeySchema);
+
+        int nSchemaType = JsonGetType(joSchema);
+
         if (sKey == "if" || sKey == "then" || sKey == "else")
         {
             if (!(nHandledFlags & HANDLED_CONDITIONAL))
@@ -4055,20 +3368,17 @@ json schema_core_Validate(json jInstance, json joSchema)
                 nHandledFlags |= HANDLED_CONDITIONAL;
             }
         }
-        else if (sKey == "prefixItems" || sKey == "items" || sKey == "contains" ||
-            sKey == "minContains" || sKey == "maxContains"|| sKey == "additionalItems")
+        else if (sKey == "contains" || sKey == "minContains" || sKey == "maxContains")
         {
-            if (!(nHandledFlags & HANDLED_ARRAY))
+            if (!(nHandledFlags & HANDLED_CONTAINS))
             {
-                jResult = schema_validate_Array(jInstance,
-                    JsonObjectGet(joSchema, "prefixItems"),
-                    JsonObjectGet(joSchema, "items"),
+                jResult = schema_validate_Contains(jInstance,
                     JsonObjectGet(joSchema, "contains"),
                     JsonObjectGet(joSchema, "minContains"),
                     JsonObjectGet(joSchema, "maxContains"),
-                    JsonObjectGet(joSchema, "additionalItems")
+                    nDraft >= SCHEMA_DRAFT_2019_09;
                 );
-                nHandledFlags |= HANDLED_ARRAY;
+                nHandledFlags |= HANDLED_CONTAINS;
             }
         }
         else if (sKey == "properties" || sKey == "patternProperties" ||
@@ -4089,26 +3399,6 @@ json schema_core_Validate(json jInstance, json joSchema)
             else
                 continue;
         }
-        else if (sKey == "minimum" || sKey == "exclusiveMinimum")
-        {
-            if (!(nHandledFlags & HANDLED_MINIMUM))
-            {
-                jResult = schema_validate_Minimum(jInstance,
-                    JsonObjectGet(joSchema, "minimum"),
-                    JsonObjectGet(joSchema, "exclusiveMinimum"));
-                nHandledFlags |= HANDLED_MINIMUM;
-            }
-        }
-        else if (sKey == "maximum" || sKey == "exclusiveMaximum")
-        {
-            if (!(nHandledFlags & HANDLED_MAXIMUM))
-            {
-                jResult = schema_validate_Maximum(jInstance,
-                    JsonObjectGet(joSchema, "maximum"),
-                    JsonObjectGet(joSchema, "exclusiveMaximum"));
-                nHandledFlags |= HANDLED_MAXIMUM;
-            }
-        }
         else if (sKey == "title" || sKey == "description" || sKey == "default" ||
             sKey == "deprecated" || sKey == "readOnly" || sKey == "writeOnly" ||
             sKey == "examples")
@@ -4117,33 +3407,88 @@ json schema_core_Validate(json jInstance, json joSchema)
         }
         else if (sKey == "unevaluatedProperties" || sKey == "unevaluatedItems")
             continue;
-        else
+
+        schema_scope_PushSchemaPath(sKey);
+
+        if (sKey == "prefixItems")
+            jResult = schema_validate_Tuple(jInstance, jKeySchema);
+        else if (sKey == "items")
         {
-            schema_scope_PushSchemaPath(sKey);
-
-            if      (sKey == "allOf")            {jResult = schema_validate_AllOf(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "anyOf")            {jResult = schema_validate_AnyOf(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "oneOf")            {jResult = schema_validate_OneOf(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "not")              {jResult = schema_validate_Not(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "required")         {jResult = schema_validate_Required(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "minProperties")    {jResult = schema_validate_MinProperties(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "maxProperties")    {jResult = schema_validate_MaxProperties(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "dependentRequired"){jResult = schema_validate_DependentRequired(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "propertyNames")    {jResult = schema_validate_PropertyNames(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "type")             {jResult = schema_validate_Type(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "enum")             {jResult = schema_validate_Enum(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "const")            {jResult = schema_validate_Const(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "multipleOf")       {jResult = schema_validate_MultipleOf(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "maxLength")        {jResult = schema_validate_MaxLength(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "minLength")        {jResult = schema_validate_MinLength(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "pattern")          {jResult = schema_validate_Pattern(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "maxItems")         {jResult = schema_validate_MaxItems(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "minItems")         {jResult = schema_validate_MinItems(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "uniqueItems")      {jResult = schema_validate_UniqueItems(jInstance, JsonObjectGet(joSchema, sKey));}
-            else if (sKey == "format")           {jResult = schema_validate_Format(jInstance, JsonObjectGet(joSchema, sKey));}
-
-            schema_scope_PopSchemaPath();
+            if (nSchemaType == JSON_TYPE_ARRAY)
+                jResult = schema_validate_Tuple(jInstance, jKeySchema, nDraft >= SCHEMA_DRAFT_2019_09);
+            else if (nSchemaType == JSON_TYPE_OBJECT || nSchemaType == JSON_TYPE_BOOL)
+            {
+                int nTupleLength = JsonGetLength(JsonObjectGet(joSchema, "prefixItems"));
+                jResult = schema_validate_UniformItem(jInstance, jKeySchema, nTupleLength, nDraft >= SCHEMA_DRAFT_2019_09);
+            }
         }
+        else if (sKey == "additionalItems")
+        {
+            int nTupleLength = JsonGetLength(JsonObjectGet(joSchema, "items"));
+            jResult = schema_validate_UniformItem(jInstance, jKeySchema, nTupleLength);
+        }
+        else if (sKey == "minimum")
+            jResult = schema_validate_Assertion(sKey, jInstance, ">=", jKeySchema);
+        else if (sKey == "maximum")
+            jResult = schema_validate_Assertion(sKey, jInstance, "<=", jKeySchema);
+        else if (sKey == "exclusiveMinimum" || sKey == "exclusiveMaximum")
+        {
+            string sOperator = sKey == "exclusiveMinimum" ? ">" : "<";
+
+            if (nKeySchemaType == JSON_TYPE_INTEGER || nKeySchemaType == JSON_TYPE_FLOAT)
+                jResult = schema_validate_Assertion(sKey, jInstance, sOperator, sKeySchema);
+            else if (nKeySchemaType == JSON_TYPE_BOOL && jKeySchema == JSON_TRUE)
+            {
+                string sKeyword = sKey == "exclusiveMinimum" ? "minimum" : "maximum";
+
+                json jKeyword = JsonObjectGet(joSchema, sKeyword);
+                int nKeywordType = JsonGetType(jKeyword);
+                if (nKeywordType == JSON_TYPE_INTEGER || nKeywordType == JSON_TYPE_FLOAT)
+                    jResult = schema_validate_Assertion(sKey, jInstance, sOperator, jKeyword);
+            }
+        }
+        else if (sKey == "minItems")
+            jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), ">=", jKeySchema);
+        else if (sKey == "maxItems")
+            jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), "<=", jKeySchema);
+        else if (sKey == "minLength")
+            jResult = schema_validate_Assertion(sKey, GetStringLength(JsonGetString(jInstance)), ">=", jKeySchema);
+        else if (sKey == "maxLength")
+            jResult = schema_validate_Assertion(sKey, GetStringLength(JsonGetString(jInstance)), "<=", jKeySchema);
+        else if (sKey == "minProperties")
+            jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), ">=", jKeySchema);
+        else if (sKey == "maxProperties")
+            jResult = schema_validate_Assertion(sKey, JsonGetLength(jInstance), "<=", jKeySchema);
+        else if (sKey == "multipleOf")
+            jResult = schema_validate_Assertion(sKey, jInstance, "%", jKeySchema);
+        else if (sKey == "type")
+            jResult = schema_validate_Type(jInstance, jKeySchema);
+        else if (sKey == "enum")
+            jResult = schema_validate_Enum(jInstance, jKeySchema);
+        else if (sKey == "const")
+            jResult = schema_validate_Const(jInstance, jKeySchema);
+        else if (sKey == "allOf")
+            jResult = schema_validate_AllOf(jInstance, jKeySchema);
+        else if (sKey == "anyOf")
+            jResult = schema_validate_AnyOf(jInstance, jKeySchema);
+        else if (sKey == "oneOf")
+            jResult = schema_validate_OneOf(jInstance, jKeySchema);
+        else if (sKey == "not")
+            jResult = schema_validate_Not(jInstance, jKeySchema);
+        else if (sKey == "required")
+            jResult = schema_validate_Required(jInstance, jKeySchema);
+        else if (sKey == "dependentRequired")
+            jResult = schema_validate_DependentRequired(jInstance, jKeySchema);
+        else if (sKey == "propertyNames")
+            jResult = schema_validate_PropertyNames(jInstance, jKeySchema);
+        else if (sKey == "pattern")
+            jResult = schema_validate_Pattern(jInstance, jKeySchema);
+        else if (sKey == "uniqueItems")
+            jResult = schema_validate_UniqueItems(jInstance, jKeySchema);
+        else if (sKey == "format")
+            jResult = schema_validate_Format(jInstance, jKeySchema);
+
+        schema_scope_PopSchemaPath();
 
         int nResultType = JsonGetType(jResult);
         if (nResultType == JSON_TYPE_ARRAY)
