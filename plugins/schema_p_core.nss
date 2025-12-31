@@ -216,7 +216,7 @@ void OnLibraryLoad()
         SetName(oPlugin, "[Plugin] System :: JSON Schema Validation Development");
         SetDebugPrefix(HexColorString("[JSON_SCHEMA]", COLOR_PINK), oPlugin);
 
-        RegisterEventScript(oPlugin, CHAT_PREFIX + "!json", "schema_OnPlayerChat");
+        RegisterEventScript(oPlugin, CHAT_PREFIX + "!schema", "schema_OnPlayerChat");
 
         int n = 0;
         RegisterLibraryScript("schema_OnPlayerChat", n++);

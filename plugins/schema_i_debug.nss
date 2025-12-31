@@ -1,3 +1,5 @@
+#include "util_i_debug"
+
 int DEBUG=FALSE;
 
 void schema_debug_Indent()
