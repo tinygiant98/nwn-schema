@@ -1,0 +1,1 @@
+Experimental plugin for the nwn_core_framework that implements a fully functioning json schema validator completely withing nwscript.  Once complete, and able to pass all appropriate tests based on json-schema.org's test suite, this utility will be implement as a utility-based script, possibly part of sm's sm-utils repo (?).
