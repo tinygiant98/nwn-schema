@@ -12,7 +12,22 @@
 // @TESTSUITE[Schema Core]
 // @TESTGROUP[Schema Validation]
 
-void schema_suite_validate_minlength()
+void schema_suite_RunTest(json joTest, json joSchema)
+{
+    json jsDescription = JsonObjectGet(joTest, "description");
+    json jInstance = JsonObjectGet(joTest, "data");
+    json jbValid = JsonObjectGet(joTest, "valid");
+    
+    int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
+
+    if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
+    {
+        DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
+        Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
+    }
+}
+
+void schema_suite_RunTestSuiteFromFile()
 {
     json jaSuite = JsonParse(ResManGetFileContents("test", RESTYPE_TXT));
     int i; for (; i < JsonGetLength(jaSuite); i++)
@@ -45,10 +60,7 @@ void schema_suite_validate_minlength()
 
 void main()
 {
-    schema_scope_Destroy();
     DescribeTestSuite("Schema Core Unit Tests");
-    schema_suite_validate_minlength();
-
-    
+    schema_suite_RunTestSuiteFromFile();
 }
     

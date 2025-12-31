@@ -3515,9 +3515,12 @@ json schema_core_Validate(json jInstance, json joSchema)
     /// @todo
     ///     [ ] Handle nDraft = 0 ?
     ///     [ ] can this be done without nDraft at all?
-    ///     [ ] Ensure the pushed schema can be accessed by $ref/$dynamicRef/$recusriveRef for
-    ///         returning the schema if there's an empty fragment or non-path fragment
+    ///         probably, but we'd need to do the keyword validation/matching check within the
+    ///         group functions, which is likelyl doable to do away with the everything that
+    ///         has to do with drafts, which is prefereable!
     int nDraft = JsonGetInt(schema_scope_GetSchema());
+    if (nDraft == 0)
+        nDraft = SCHEMA_DRAFT_LATEST;
 
     int bDynamicAnchor = FALSE;
     if (JsonFind(jaSchemaKeys, JsonString("$dynamicAnchor")) != JsonNull() ||
@@ -3530,11 +3533,6 @@ json schema_core_Validate(json jInstance, json joSchema)
     /// @todo
     ///     [ ] These resolution functions can and will return JsonNull().  Check for that before
     ///         invoking another validation process.
-    ///     [ ] debug refs.  they're not evaluating correctly
-    ///         This is likely because fragments aren't returning the schema appropraiately.  I assume
-    ///         the original schema isn't saved anywhere, so there's nothing to referece.
-    ///         Save the original schema into (maybe) lexical_scope[0] (?) since the 0-index is
-    ///         ignored in this system, we can use it for whatever we want.
     
     /// @brief Resolve references, dynamic references and recursive references.  Dynamic and recursive
     ///     references take advantage of dynamic scope to find the appropriate anchor/subschema.  If
@@ -3617,34 +3615,40 @@ json schema_core_Validate(json jInstance, json joSchema)
         //if (!schema_validate_AssertInstanceType(sKey, jInstance))
         //    continue;
 
-        json jKeySchema = JsonObjectGet(joSchema, sKey);
-        int nKeySchemaType = JsonGetType(jKeySchema);
-
-        int nSchemaType = JsonGetType(joSchema);
+        /// @note Our grouped keyword evaluations contain draft guards because they could potentially
+        ///     end-around or keyword/draft matching system given the way they are extracted from
+        ///     the json schema.  If the user provides a schema that contains a keyword that is invalid
+        ///     for the draft (such as additionalItems in draft 2020_12), including the keyword items
+        ///     (which is valid in 2020_12) will automatically include the additionalItems keyword, even
+        ///     though it's invalid.  The single keyword validation process checks for those, so no
+        ///     issue in those, only these groups need guarding.
 
         if (sKey == "if" || sKey == "then" || sKey == "else")
         {
-            if (!(nHandledFlags & HANDLED_CONDITIONAL))
+            if (nDraft >= SCHEMA_DRAFT_7)            
             {
-                jResult = schema_validate_If(jInstance,
-                    JsonObjectGet(joSchema, "if"),
-                    JsonObjectGet(joSchema, "then"),
-                    JsonObjectGet(joSchema, "else"),
-                    nDraft >= SCHEMA_DRAFT_2019_09
-                );
-                nHandledFlags |= HANDLED_CONDITIONAL;
+                if (!(nHandledFlags & HANDLED_CONDITIONAL))
+                {
+                    jResult = schema_validate_If(jInstance,
+                        JsonObjectGet(joSchema, "if"),
+                        JsonObjectGet(joSchema, "then"),
+                        JsonObjectGet(joSchema, "else"),
+                        nDraft >= SCHEMA_DRAFT_2019_09
+                    );
+                    nHandledFlags |= HANDLED_CONDITIONAL;
+                }
+                else
+                    continue;
             }
-            else
-                continue;
         }
         else if (sKey == "contains" || sKey == "minContains" || sKey == "maxContains")
         {
             if (!(nHandledFlags & HANDLED_CONTAINS))
             {
                 jResult = schema_validate_Contains(jInstance,
-                    JsonObjectGet(joSchema, "contains"),
-                    JsonObjectGet(joSchema, "minContains"),
-                    JsonObjectGet(joSchema, "maxContains"),
+                    (nDraft >= SCHEMA_DRAFT_6 ? JsonObjectGet(joSchema, "contains") : JsonNull()),
+                    (nDraft >= SCHEMA_DRAFT_2019_09 ? JsonObjectGet(joSchema, "minContains") : JsonNull()),
+                    (nDraft >= SCHEMA_DRAFT_2019_09 ? JsonObjectGet(joSchema, "maxContains") : JsonNull()),
                     nDraft >= SCHEMA_DRAFT_2019_09
                 );
                 nHandledFlags |= HANDLED_CONTAINS;
@@ -3662,8 +3666,8 @@ json schema_core_Validate(json jInstance, json joSchema)
                     JsonObjectGet(joSchema, "properties"),
                     JsonObjectGet(joSchema, "patternProperties"),
                     JsonObjectGet(joSchema, "additionalProperties"),
-                    JsonObjectGet(joSchema, "dependencies"),
-                    JsonObjectGet(joSchema, "dependentSchemas"),
+                    (nDraft < SCHEMA_DRAFT_2019_09 ? JsonObjectGet(joSchema, "dependencies") : JsonNull()),
+                    (nDraft >= SCHEMA_DRAFT_2019_09 ? JsonObjectGet(joSchema, "dependentSchemas") : JsonNull()),
                     nDraft >= SCHEMA_DRAFT_2019_09
                 );
                 nHandledFlags |= HANDLED_OBJECT;
@@ -3676,9 +3680,9 @@ json schema_core_Validate(json jInstance, json joSchema)
             if (!(nHandledFlags & HANDLED_ITEMS))
             {
                 jResult = schema_validate_Items(jInstance,
-                    JsonObjectGet(joSchema, "prefixItems"),
+                    (nDraft >= SCHEMA_DRAFT_2020_12 ? JsonObjectGet(joSchema, "prefixItems") : JsonNull()),
                     JsonObjectGet(joSchema, "items"),
-                    JsonObjectGet(joSchema, "additionalItems"),
+                    (nDraft < SCHEMA_DRAFT_2020_12 ? JsonObjectGet(joSchema, "additionalItems") : JsonNull()),
                     nDraft >= SCHEMA_DRAFT_2019_09
                 );
                 nHandledFlags |= HANDLED_ITEMS;
@@ -3696,25 +3700,13 @@ json schema_core_Validate(json jInstance, json joSchema)
         else if (sKey == "unevaluatedProperties" || sKey == "unevaluatedItems")
             continue;
 
+        json jKeySchema = JsonObjectGet(joSchema, sKey);
+        int nKeySchemaType = JsonGetType(jKeySchema);
+
+        int nSchemaType = JsonGetType(joSchema);
+
         schema_scope_PushSchemaPath(sKey);
 
-//        if (sKey == "prefixItems")
-//            jResult = schema_validate_Tuple(jInstance, jKeySchema);
-//        else if (sKey == "items")
-//        {
-//            if (nSchemaType == JSON_TYPE_ARRAY)
-//                jResult = schema_validate_Tuple(jInstance, jKeySchema, nDraft >= SCHEMA_DRAFT_2019_09);
-//            else if (nSchemaType == JSON_TYPE_OBJECT || nSchemaType == JSON_TYPE_BOOL)
-//            {
-//                int nTupleLength = JsonGetLength(JsonObjectGet(joSchema, "prefixItems"));
-//                jResult = schema_validate_Uniform(jInstance, jKeySchema, nTupleLength, nDraft >= SCHEMA_DRAFT_2019_09);
-//            }
-//        }
-//        else if (sKey == "additionalItems")
-//        {
-//            int nTupleLength = JsonGetLength(JsonObjectGet(joSchema, "items"));
-//            jResult = schema_validate_Uniform(jInstance, jKeySchema, nTupleLength);
-//        }
         if (sKey == "minimum")
             jResult = schema_validate_Assertion(sKey, jInstance, ">=", jKeySchema);
         else if (sKey == "maximum")
