@@ -96,6 +96,12 @@ void schema_OnPlayerChat()
         int nToken = NuiCreate(oPC, jWindow);
         NuiSetBind(oPC, nToken, "geometry", NuiRect(100.0f, 100.0f, 250.0, 150.0));
     }
+    else if (TEST == 5)
+    {
+        SetLocalInt(GetModule(), "TEST_ASCII", TRUE);
+        ExecuteScript("schema_t_core");
+        DeleteLocalInt(GetModule(), "TEST_ASCII");
+    }
 }
 
 

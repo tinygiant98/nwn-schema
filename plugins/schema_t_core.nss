@@ -18,12 +18,89 @@ void schema_suite_RunTest(json joTest, json joSchema)
     json jInstance = JsonObjectGet(joTest, "data");
     json jbValid = JsonObjectGet(joTest, "valid");
     
+    schema_debug_Value("[RunTest] jInstance = ", JsonDump(jInstance));
+    schema_debug_Json("[RunTest] jInstance", jInstance);
+
+    schema_debug_Value("[RunTest] joSchema = ", JsonDump(joSchema));
+    schema_debug_Json("[RunTest] joSchema", joSchema);
+
     int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
 
     if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
     {
         DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
         Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
+    }
+}
+
+void schema_suite_TestNonAscii()
+{
+    DescribeTestGroup("Non-ASCII Character Support");
+
+    // Test 1: Enum
+    {
+        json jSchema = JsonParse(r"
+            {
+                ""enum"": [""á""]
+            }
+        ");
+        json jInstance = JsonString("á");
+        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
+        Assert("Enum with non-ASCII character", bValid == TRUE);
+    }
+
+    // Test 2: Required
+    {
+        json jSchema = JsonParse(r"
+            {
+                ""required"": [""á""]
+            }
+        ");
+        json jInstance = JsonParse(r"{ ""á"": 1 }");
+        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
+        Assert("Required property with non-ASCII character", bValid == TRUE);
+    }
+
+    // Test 3: Properties
+    {
+        json jSchema = JsonParse(r"
+            {
+                ""properties"": {
+                    ""á"": { ""type"": ""string"" }
+                }
+            }
+        ");
+        json jInstance = JsonParse(r"{ ""á"": ""foo"" }");
+        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
+        Assert("Properties with non-ASCII key", bValid == TRUE);
+    }
+
+    // Test 4: DependentRequired
+    {
+        json jSchema = JsonParse(r"
+            {
+                ""dependentRequired"": {
+                    ""foo"": [""á""]
+                }
+            }
+        ");
+        json jInstance = JsonParse(r"{ ""foo"": 1, ""á"": 2 }");
+        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
+        Assert("DependentRequired with non-ASCII dependency", bValid == TRUE);
+    }
+    
+    // Test 5: PatternProperties (re-verifying)
+    {
+        json jSchema = JsonParse(r"
+            {
+                ""patternProperties"": {
+                    ""^á"": { ""type"": ""string"" }
+                }
+            }
+        ");
+        json jInstance = JsonParse(r"{ ""á"": ""foo"" }");
+        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
+        Assert("PatternProperties with non-ASCII regex", bValid == TRUE);
     }
 }
 
@@ -45,6 +122,12 @@ void schema_suite_RunTestSuiteFromFile()
                 json jInstance = JsonObjectGet(joTest, "data");
                 json jbValid = JsonObjectGet(joTest, "valid");
                 
+                schema_debug_Value("[RunTest] jInstance = ", JsonDump(jInstance));
+                schema_debug_Json("[RunTest] jInstance", jInstance);
+
+                schema_debug_Value("[RunTest] joSchema = ", JsonDump(joSchema));
+                schema_debug_Json("[RunTest] joSchema", joSchema);
+
                 int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
 
                 if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
@@ -72,7 +155,7 @@ void schema_suite_RunTestSuiteFromFile()
 /// @note This methodology was selected as a consistent method to initially populate schema tables with json-schema.org
 ///     metaschema without including additional files.  Official drafts are not expected to change, so this
 ///     function should only require updating when a new official meta schema is released by json-schema.org.
-/// @todo This probably belongs in util_c_schema once everything is packaged up.
+/// @todo This probably belongs in util_c_schema once everything is packaged up. 
 json schema_core_GetTrustedSchema()
 {
     json jaTrustedSchema = JsonArray();
@@ -1234,9 +1317,8 @@ json schema_core_GetTrustedSchema()
 void main()
 {
     Debug("Running " + __FILE__);
-    int bLoad = GetLocalInt(GetModule(), "LOAD_SCHEMA");
 
-    if (bLoad)
+    if (GetLocalInt(GetModule(), "LOAD_SCHEMA"))
     {
         Debug("bLoad = TRUE");
 
@@ -1257,6 +1339,10 @@ void main()
             SqlStep(q);
         }
         schema_core_CommitTransaction();
+    }
+    else if (GetLocalInt(GetModule(), "TEST_ASCII"))
+    {
+        schema_suite_TestNonAscii();
     }
     else
     {

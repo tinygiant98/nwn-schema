@@ -75,7 +75,16 @@ void schema_debug_Json(string sTitle, json jValue)
     Debug(HexColorString(JsonDump(jValue, 4), COLOR_SALMON));
 }
 
-void schema_debug_JsonType(string sTitle, json jValue)
+void schema_debug_Output(string sTitle, json joOutputUnit, int bID = FALSE)
+{
+    if (!DEBUG) return;
+
+    Debug(schema_debug_GetIndent() + "Output validity @ " + sTitle + " = " +
+        HexColorString(JsonObjectGet(joOutputUnit, "valid") == JSON_TRUE ? "TRUE" : "FALSE", COLOR_ORANGE) +
+        (bID ? " for " + HexColorString(JsonDump(JsonObjectGet(joOutputUnit, "uuid")), COLOR_CYAN_DARK) : ""));
+}
+
+void schema_debug_Type(string sTitle, json jValue)
 {
     string sType;
     switch (JsonGetType(jValue))
