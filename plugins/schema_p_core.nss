@@ -15,37 +15,16 @@
 
 void schema_OnPlayerChat()
 {
-    //ExecuteScript("schema_t_core");
+    object oPC = GetPCChatSpeaker();
 
-//    json jSchema = JsonParse(r"{
-//        ""type"": ""object"",
-//        ""properties"": {
-//            ""name"": { ""type"": ""string"" },
-//            ""age"": { ""type"": ""integer"", ""minimum"": 0 },
-//            ""email"": { ""type"": ""string"" }
-//        },
-//        ""required"": [""name"", ""age"", ""email""],
-//        ""additionalProperties"": false
-//    }");
-//
-//    json jInstance = JsonParse(r"{
-//        ""name"": ""Alice"",
-//        ""age"": 30,
-//        ""email"": ""alice@example.com""
-//    }");
-//
-//    json joResult = schema_core_Validate(jInstance, jSchema);
-//    Debug("Validation Result: " + JsonDump(joResult, 4));
-
-    int TEST = 0;
+    int TEST = CountChatArguments(oPC) == 0 ? 0 : StringToInt(GetChatArgument(oPC));
     if (TEST == 0)
         ExecuteScript("schema_t_core");
     else if (TEST == 1)
     {
-        json j = JsonBool(TRUE);
-
-        int b = j == JSON_TRUE;
-        Notice(b ? "TRUE" : "FALSE");
+        SetLocalInt(GetModule(), "LOAD_SCHEMA", TRUE);
+        ExecuteScript("schema_t_core");
+        DeleteLocalInt(GetModule(), "LOAD_SCHEMA");
     }
     else if (TEST == 2)
     {
