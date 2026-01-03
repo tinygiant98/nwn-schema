@@ -172,12 +172,12 @@ void schema_core_CreateTables()
 {
     schema_core_BeginTransaction(); 
 
+    /// `schema_schema` holds all validated schema, including meta schema provided by json-schema.org
+    ///     All user-provided schema will also be saved to this table for retrieval or later use.
+    ///     If the UNIQUE key is violated, the record will be removed and replaced (not updated) by
+    ///     the incoming schema, allowing associated records in `schema_keyword` to be deleted without
+    ///     using a foreign key.
     string s = r"
-        PRAGMA foreign_keys = ON;
-    ";
-    schema_core_ExecuteQuery(s);
-
-    s = r"
         CREATE TABLE IF NOT EXISTS schema_schema (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             schema TEXT NOT NULL,
@@ -200,15 +200,21 @@ void schema_core_CreateTables()
     ;";
     schema_core_ExecuteQuery(s);
 
+    /// `schema_keyword` holds all keywords directly assocaited with a specified schema.
+    ///     Keywords associated by reference (or allOf) are not included here and will
+    ///     be resolved when keyword map is loaded at validation runtime.
     s = r"
         CREATE TABLE IF NOT EXISTS schema_keyword (
             schema_id INTEGER,
             keyword TEXT,
-            FOREIGN KEY(schema_id) REFERENCES schema_schema(id) ON DELETE CASCADE
+            PRIMARY KEY (schema_id, keyword)
         ) WITHOUT ROWID;
     ";
     schema_core_ExecuteQuery(s);
 
+    /// @note This trigger is the basis for the keyword mapping and validation system.
+    ///     When a new schema is inserted, all keywords from its properties object
+    ///     are inserted into the `schema_keyword` table for later use during validation.
     s = r"
         CREATE TRIGGER IF NOT EXISTS schema_insert_keywords AFTER INSERT ON schema_schema
         BEGIN
@@ -219,6 +225,19 @@ void schema_core_CreateTables()
     ";
     schema_core_ExecuteQuery(s);
 
+    /// @note Foreign Key relationships don't always work as expected because of the way
+    ///     NWN handles sqlite connections to external databases.  To get around this limitation,
+    ///     use a BEFORE INSERT trigger to remove all associated records in other tables
+    ///     and remove all use of FOREIGN KEY.
+    s = r"
+        CREATE TRIGGER IF NOT EXISTS schema_delete_keywords BEFORE INSERT ON schema_schema
+        FOR EACH ROW
+        BEGIN
+            DELETE FROM schema_keyword 
+            WHERE schema_id = (SELECT id FROM schema_schema WHERE schema_id = NEW.schema_id);
+        END;
+    ";
+    schema_core_ExecuteQuery(s);
     schema_core_CommitTransaction();
 }
 
@@ -1902,7 +1921,7 @@ json schema_keyword_LoadTypeMap(string sSchemaID)
     string s = r"
         SELECT k.keyword
         FROM schema_keyword k
-        JOIN schema_schema s ON k.schema_ref_id = s.id
+        JOIN schema_schema s ON k.schema_id = s.id
         WHERE s.schema_id = :id;
     ";
     sqlquery q = schema_core_PrepareQuery(s);
