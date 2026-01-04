@@ -399,45 +399,46 @@ json schema_scope_GetContext(string sContextKey)
 /// @returns A json array containing the path segments, or an empty json array if the path is empty.
 json schema_scope_Deconstruct(string sPointer)
 {
-    string s = r"
-        WITH RECURSIVE split_string(input_string, part, rest) AS (
-            SELECT 
-                TRIM(:pointer, '/'), 
-                CASE 
-                    WHEN INSTR(TRIM(:pointer, '/'), '/') = 0 
-                        THEN TRIM(:pointer, '/')
-                    ELSE SUBSTR(TRIM(:pointer, '/'), 1, INSTR(TRIM(:pointer, '/'), '/') - 1)
-                END,
-                CASE 
-                    WHEN INSTR(TRIM(:pointer, '/'), '/') = 0 
-                        THEN ''
-                    ELSE SUBSTR(TRIM(:pointer, '/'), INSTR(TRIM(:pointer, '/'), '/') + 1)
-                END
-            
-            UNION ALL
-            
-            SELECT 
-                rest,
-                CASE 
-                    WHEN INSTR(rest, '/') = 0 
-                        THEN rest
-                    ELSE SUBSTR(rest, 1, INSTR(rest, '/') - 1)
-                END,
-                CASE 
-                    WHEN INSTR(rest, '/') = 0 
-                        THEN ''
-                    ELSE SUBSTR(rest, INSTR(rest, '/') + 1)
-                END
-            FROM split_string
-            WHERE rest != ''
-        )
-        SELECT json_group_array(part)
-        FROM split_string
-        WHERE part != '';
-    ";
-    sqlquery q = schema_core_PrepareQuery(s);
-    SqlBindString(q, ":pointer", sPointer);
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sPointer", JsonString(sPointer));
 
+    // Remove leading # if present
+    if (GetStringLeft(sPointer, 1) == "#")
+        sPointer = GetStringRight(sPointer, GetStringLength(sPointer) - 1);
+
+    if (sPointer == "")
+    {
+        schema_debug_ExitFunction(__FUNCTION__);
+        return JsonArray();
+    }
+
+    // If it starts with /, remove it to simplify splitting, but keep track that we did
+    if (GetStringLeft(sPointer, 1) == "/")
+        sPointer = GetStringRight(sPointer, GetStringLength(sPointer) - 1);
+    else
+    {
+        schema_debug_ExitFunction(__FUNCTION__);
+        return JsonArray(); // JSON Pointer must start with / if not empty
+    }
+
+    string s = r"
+        WITH RECURSIVE split(value, str) AS (
+            SELECT 
+                '', :str || '/'
+            UNION ALL
+            SELECT
+                substr(str, 0, instr(str, '/')),
+                substr(str, instr(str, '/') + 1)
+            FROM split
+            WHERE str != ''
+        )
+        SELECT json_group_array(value) FROM split WHERE str != :str || '/';
+    ";
+    
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindString(q, ":str", sPointer);
+
+    schema_debug_ExitFunction(__FUNCTION__);
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
 }
 
@@ -1546,6 +1547,15 @@ json schema_reference_GetSchema(string sSchemaID)
 {
     if (sSchemaID == "")
         return JsonNull();
+
+    // Check the current document's ID map first
+    json joIDMap = GetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP");
+    if (JsonGetType(joIDMap) == JSON_TYPE_OBJECT)
+    {
+        json joSchema = JsonObjectGet(joIDMap, sSchemaID);
+        if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
+            return joSchema;
+    }
 
     schema_core_CreateTables();
 
@@ -3494,6 +3504,56 @@ json schema_validate_If(json jInstance, json joIf, json joThen, json joElse, int
     return joOutputUnit;
 }
 
+/// @private Recursively map all $ids in the schema to their schema objects.
+/// @param joSchema The schema to map.
+/// @param sBaseURI The current base URI.
+/// @param joMap The map object (URI -> Schema).
+/// @returns The updated map object.
+json schema_util_MapIDs(json joSchema, string sBaseURI, json joMap)
+{
+    // schema_debug_EnterFunction(__FUNCTION__);
+    // schema_debug_Argument(__FUNCTION__, "sBaseURI", JsonString(sBaseURI));
+
+    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT)
+        return joMap;
+
+    string sID = JsonGetString(JsonObjectGet(joSchema, "$id"));
+    if (sID == "")
+        sID = JsonGetString(JsonObjectGet(joSchema, "id"));
+
+    if (sID != "")
+    {
+        sBaseURI = schema_reference_ResolveURI(sBaseURI, sID);
+        joMap = JsonObjectSet(joMap, sBaseURI, joSchema);
+    }
+
+    json jaKeys = JsonObjectKeys(joSchema);
+    int i; for (i = 0; i < JsonGetLength(jaKeys); i++)
+    {
+        string sKey = JsonGetString(JsonArrayGet(jaKeys, i));
+        if (sKey == "enum" || sKey == "const")
+            continue;
+
+        json jValue = JsonObjectGet(joSchema, sKey);
+        int nType = JsonGetType(jValue);
+
+        if (nType == JSON_TYPE_OBJECT)
+        {
+            joMap = schema_util_MapIDs(jValue, sBaseURI, joMap);
+        }
+        else if (nType == JSON_TYPE_ARRAY)
+        {
+            int j; for (j = 0; j < JsonGetLength(jValue); j++)
+            {
+                joMap = schema_util_MapIDs(JsonArrayGet(jValue, j), sBaseURI, joMap);
+            }
+        }
+    }
+
+    // schema_debug_ExitFunction(__FUNCTION__);
+    return joMap;
+}
+
 /// @brief Annotates the output with a metadata keyword.
 /// @param sKey The metadata keyword.
 /// @param jValue The value for the metadata keyword.
@@ -3558,6 +3618,15 @@ json schema_core_Validate(json jInstance, json joSchema)
         schema_scope_SetBaseSchema(joSchema);
         nLexicalScopes++;
         SetLocalJson(GetModule(), "SCHEMA_KEYWORD_MAP", schema_keyword_LoadTypeMap(sSchema));
+
+        /// @note Map all IDs in the document for reference resolution.  This allows us to
+        ///     resolve internal references that haven't been saved to the database yet.
+        string sRootID = JsonGetString(JsonObjectGet(joSchema, "$id"));
+        if (sRootID == "")
+            sRootID = JsonGetString(JsonObjectGet(joSchema, "id"));
+        
+        json joIDMap = schema_util_MapIDs(joSchema, sRootID, JsonObject());
+        SetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP", joIDMap);
     }
 
     /// @todo
@@ -3570,7 +3639,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     if (nDraft == 0)
         nDraft = SCHEMA_DRAFT_LATEST;
 
-    // Handle $id (or id) to establish new Base URI context
+    /// @note Handle $id (or id) to establish new Base URI context.
     string sID = JsonGetString(JsonObjectGet(joSchema, "$id"));
     if (sID == "" && nDraft < SCHEMA_DRAFT_2019_09)
         sID = JsonGetString(JsonObjectGet(joSchema, "id"));
@@ -3587,17 +3656,18 @@ json schema_core_Validate(json jInstance, json joSchema)
         if (sBaseURI != "")
         {
             sID = schema_reference_ResolveURI(sBaseURI, sID);
-            // Update the schema object with the absolute ID for the scope
-            // We create a shallow copy with the updated ID to push to the stack
-            // This ensures children resolve against the absolute URI
+            
+            /// @note Update the schema object with the absolute ID for the scope.
+            ///     We create a shallow copy with the updated ID to push to the stack.
+            ///     This ensures children resolve against the absolute URI.
             json joNewScope = JsonObjectSet(joSchema, "$id", JsonString(sID));
             schema_scope_PushLexical(joNewScope);
             nLexicalScopes++;
         }
         else
         {
-            // If no base URI (e.g. root with relative ID?), just push as is
-            // But usually root has absolute ID or we treat it as such
+            /// @note If no base URI (e.g. root with relative ID?), just push as is.
+            ///     But usually root has absolute ID or we treat it as such.
             schema_scope_PushLexical(joSchema);
             nLexicalScopes++;
         }
