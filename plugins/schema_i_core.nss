@@ -1806,8 +1806,8 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef, int bRevertTo
 json schema_reference_ResolveRecursiveRef(json joSchema)
 {
     json jaDynamic = schema_scope_GetDynamic();
-    if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
-        return JsonNull();
+    // if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
+    //    return JsonNull();
 
     /*
     json jaSchema = JsonArrayGet(jaDynamic, schema_scope_GetDepth());
@@ -1825,6 +1825,7 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
 
     // jaDynamic is the stack of scopes for the current depth.
     // We iterate through the stack to find the recursive anchor.
+    /*
     int i; for (i = 0; i < JsonGetLength(jaDynamic); i++)
     {
         json joScope = JsonArrayGet(jaDynamic, i);
@@ -1832,10 +1833,30 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
         if (JsonGetType(jsAnchor) == JSON_TYPE_BOOL && jsAnchor == JSON_TRUE)
             return joScope;
     }
+    */
 
-    /// @note If the $recursiveAnchor is not found in the current dynamic scope,
-    ///     the $recursiveRef is treated as "$ref": "#".
-    return schema_scope_GetBaseSchema();
+    json jRef = JsonObjectGet(joSchema, "$recursiveRef");
+    json joTarget = schema_reference_ResolveRef(joSchema, jRef);
+
+    if (JsonGetType(joTarget) == JSON_TYPE_NULL)
+        return JsonNull();
+
+    json jsAnchor = JsonObjectGet(joTarget, "$recursiveAnchor");
+    if (JsonGetType(jsAnchor) != JSON_TYPE_BOOL || jsAnchor != JSON_TRUE)
+        return joTarget;
+
+    if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
+        return joTarget;
+
+    int i; for (i = 0; i < JsonGetLength(jaDynamic); i++)
+    {
+        json joScope = JsonArrayGet(jaDynamic, i);
+        json jsScopeAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
+        if (JsonGetType(jsScopeAnchor) == JSON_TYPE_BOOL && jsScopeAnchor == JSON_TRUE)
+            return joScope;
+    }
+
+    return joTarget;
 }
 
 /// @private Load the keyword type map for the specified schema ID from the database.
