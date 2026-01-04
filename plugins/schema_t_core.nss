@@ -104,13 +104,8 @@ void schema_suite_TestNonAscii()
     }
 }
 
-void schema_suite_RunTestSuiteFromFile()
+void schema_suite_RunTestGroup(json joGroup)
 {
-    json jaSuite = JsonParse(ResManGetFileContents("test", RESTYPE_TXT));
-    int i; for (; i < JsonGetLength(jaSuite); i++)
-    {
-        json joGroup = JsonArrayGet(jaSuite, i);
-        {
             json joSchema = JsonObjectGet(joGroup, "schema");
             json jaTests = JsonObjectGet(joGroup, "tests");
             DescribeTestGroup(JsonGetString(JsonObjectGet(joGroup, "description")));
@@ -122,12 +117,6 @@ void schema_suite_RunTestSuiteFromFile()
                 json jInstance = JsonObjectGet(joTest, "data");
                 json jbValid = JsonObjectGet(joTest, "valid");
                 
-                schema_debug_Value("[RunTest] jInstance = ", JsonDump(jInstance));
-                schema_debug_Json("[RunTest] jInstance", jInstance);
-
-                schema_debug_Value("[RunTest] joSchema = ", JsonDump(joSchema));
-                schema_debug_Json("[RunTest] joSchema", joSchema);
-
                 int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
 
                 if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
@@ -137,6 +126,44 @@ void schema_suite_RunTestSuiteFromFile()
                 }
                 //Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
             } Outdent();
+}
+
+void schema_suite_RunTestSuiteFromFile()
+{
+    json jaSuite = JsonParse(ResManGetFileContents("test", RESTYPE_TXT));
+    int i; for (; i < JsonGetLength(jaSuite); i++)
+    {
+        json joGroup = JsonArrayGet(jaSuite, i);
+        {
+            DelayCommand(0.0, schema_suite_RunTestGroup(joGroup));
+//            json joSchema = JsonObjectGet(joGroup, "schema");
+//            json jaTests = JsonObjectGet(joGroup, "tests");
+//            DescribeTestGroup(JsonGetString(JsonObjectGet(joGroup, "description")));
+//            
+//            int j; for (; j < JsonGetLength(jaTests); j++)
+//            {
+//                json joTest = JsonArrayGet(jaTests, j);
+//                DelayCommand(0f, schema_suite_RunIndividualTest(joTest, joSchema));
+//
+//                json jsDescription = JsonObjectGet(joTest, "description");
+//                json jInstance = JsonObjectGet(joTest, "data");
+//                json jbValid = JsonObjectGet(joTest, "valid");
+//                
+//                schema_debug_Value("[RunTest] jInstance = ", JsonDump(jInstance));
+//                schema_debug_Json("[RunTest] jInstance", jInstance);
+//
+//                schema_debug_Value("[RunTest] joSchema = ", JsonDump(joSchema));
+//                schema_debug_Json("[RunTest] joSchema", joSchema);
+//
+//                int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
+//
+//                if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
+//                {
+//                    DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
+//                    Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
+//                }
+//                //Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
+//            } Outdent();
         }
     }
 }
