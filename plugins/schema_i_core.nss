@@ -1429,29 +1429,58 @@ string schema_reference_NormalizePath(string sPath)
 
 json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
 {
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sAnchor", JsonString(sAnchor));
+
     if (JsonGetType(joSchema) != JSON_TYPE_OBJECT || sAnchor == "")
+    {
+        schema_debug_ExitFunction(__FUNCTION__);
         return JsonNull();
+    }
 
     string s = r"
-        WITH
-            schema(data) AS (SELECT :schema),
-            schema_tree AS (SELECT * FROM schema, json_tree(schema.data)),
-            schema_parent AS (
-                SELECT parent
-                FROM schema_tree
-                WHERE key = '$anchor'
-                AND atom = :anchor
+        WITH 
+            tree AS (SELECT * FROM json_tree(:schema)),
+            root AS (SELECT id FROM tree WHERE parent IS NULL),
+            resources AS (
+                SELECT parent AS id 
+                FROM tree 
+                WHERE key IN ('$id', 'id') AND type = 'text'
+            ),
+            candidates AS (
+                SELECT parent AS id
+                FROM tree
+                WHERE key = '$anchor' AND atom = :anchor
+            ),
+            ancestors(candidate_id, current_id) AS (
+                SELECT id, id FROM candidates
+                UNION ALL
+                SELECT a.candidate_id, t.parent
+                FROM ancestors a
+                JOIN tree t ON t.id = a.current_id
+                WHERE t.parent IS NOT NULL
             )
-        SELECT value 
-        FROM schema_tree 
-        WHERE id = (SELECT parent from schema_parent);
+        SELECT t.value
+        FROM candidates c
+        JOIN tree t ON t.id = c.id
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM ancestors a
+            JOIN resources r ON r.id = a.current_id
+            WHERE a.candidate_id = c.id
+            AND a.current_id != (SELECT id FROM root)
+        )
+        LIMIT 1;
     ";
 
     sqlquery q = schema_core_PrepareQuery(s);
     SqlBindJson(q, ":schema", joSchema);
     SqlBindString(q, ":anchor", sAnchor);
 
-    return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+    json jResult = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+    
+    schema_debug_ExitFunction(__FUNCTION__);
+    return jResult;
 }
 
 json schema_reference_ResolvePointer(json joSchema, string sPointer)
