@@ -133,7 +133,7 @@ void schema_suite_RunTestSuiteFromFile()
                 if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
                 {
                     DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
-                    Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
+                    //Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
                 }
                 //Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
             } Outdent();

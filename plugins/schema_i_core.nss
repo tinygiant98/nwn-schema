@@ -51,6 +51,9 @@ int schema_util_HasKey(json jObject, string sKey);
 int schema_util_RegExpMatch(string sPattern, string sString);
 
 sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE);
+string schema_reference_MergePath(json jaMatchBase, string sPathRef);
+
+string schema_reference_NormalizePath(string sPath);
 
 /// @private Escape a string for use in a JSON pointer (~ -> ~0, / -> ~1)
 string schema_reference_EscapePointer(string sToken)
@@ -591,13 +594,83 @@ void schema_scope_ReplaceInstancePath(string sPath)
 
 void schema_scope_SetBaseSchema(json joSchema)
 {
-    json jaScope = GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL");
-    SetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL", JsonArraySet(jaScope, 0, joSchema));
+    schema_scope_PushLexical(joSchema);
 }
 
 json schema_scope_GetBaseSchema()
 {
-    return JsonArrayGet(GetLocalJson(GetModule(), "SCHEMA_SCOPE_LEXICAL"), 0);
+    json jaScope = schema_scope_Get("SCHEMA_SCOPE_LEXICAL");
+    int nLen = JsonGetLength(jaScope);
+    if (nLen == 0) return JsonNull();
+    return JsonArrayGet(jaScope, nLen - 1);
+}
+
+/// @private Resolve a relative URI against a base URI.
+string schema_reference_ResolveURI(string sBaseURI, string sRelativeURI)
+{
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sBaseURI", JsonString(sBaseURI));
+    schema_debug_Argument(__FUNCTION__, "sRelativeURI", JsonString(sRelativeURI));
+
+    if (sRelativeURI == "" || sRelativeURI == "#")
+    {
+        schema_debug_Message("sRelativeURI is empty or #");
+        schema_debug_ExitFunction(__FUNCTION__);
+        return sBaseURI;
+    }
+
+    // Regex for URI parsing (RFC 3986)
+    string r = "^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?$";
+    json jaMatchRef = RegExpMatch(r, sRelativeURI);
+    
+    // If relative URI is absolute (has scheme), return it
+    if (JsonGetString(JsonArrayGet(jaMatchRef, 2)) != "")
+    {
+        schema_debug_Message("sRealtiveURI has a schema; returning");
+        schema_debug_ExitFunction(__FUNCTION__);
+        return sRelativeURI;
+    }
+
+    json jaMatchBase = RegExpMatch(r, sBaseURI);
+    string sTargetURI = "";
+
+    if (JsonGetString(JsonArrayGet(jaMatchRef, 3)) != "") // Authority (//...)
+    {
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 1)); // Scheme
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 3)); // Authority
+        sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5))); // Path
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6)); // Query
+    }
+    else
+    {
+        if (JsonGetString(JsonArrayGet(jaMatchRef, 5)) == "") // Empty Path
+        {
+            sTargetURI += JsonGetString(JsonArrayGet(jaMatchBase, 5)); // Base Path
+            if (JsonGetString(JsonArrayGet(jaMatchRef, 6)) != "")
+                sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6)); // Ref Query
+            else
+                sTargetURI += JsonGetString(JsonArrayGet(jaMatchBase, 6)); // Base Query
+        }
+        else
+        {
+            if (GetStringLeft(JsonGetString(JsonArrayGet(jaMatchRef, 5)), 1) == "/") // Absolute Path
+                sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
+            else 
+            {
+                // Merge Paths
+                string sMerged = schema_reference_MergePath(jaMatchBase, JsonGetString(JsonArrayGet(jaMatchRef, 5)));
+                sTargetURI += sMerged;
+                sTargetURI = schema_reference_NormalizePath(sTargetURI);
+            }
+            sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6)); // Query
+        }
+        sTargetURI = JsonGetString(JsonArrayGet(jaMatchBase, 3)) + sTargetURI; // Authority
+        sTargetURI = JsonGetString(JsonArrayGet(jaMatchBase, 1)) + sTargetURI; // Scheme
+    }
+    
+    sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 8)); // Fragment
+    schema_debug_ExitFunction(__FUNCTION__);
+    return sTargetURI;
 }
 
 /// @private Increment the current scope depth by 1 and modify the scope arrays to handle
@@ -1315,24 +1388,39 @@ json schema_output_Detailed(json joOutputUnit)
 /// @returns A normalized path string with empty segments and hierarchical segments resolved.
 string schema_reference_NormalizePath(string sPath)
 {
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sPath", JsonString(sPath));
+
     json jaParts = schema_scope_Deconstruct(sPath);
     json jaStack = JsonArray();
+
+    schema_debug_Json("jaParts", jaParts);
+    schema_debug_Json("jaStack", jaStack);
 
     int i, n = JsonGetLength(jaParts);
     for (i = 0; i < n; i++)
     {
+        schema_debug_Value("Start jaStack Build Loop #", IntToString(i) + "/" + IntToString(n));
+
         string s = JsonGetString(JsonArrayGet(jaParts, i));
+        schema_debug_Value("  s (initial)", s);
+
         s = schema_reference_UnescapePointer(s);
+        schema_debug_Value("  s (after UnescapePointer)", s);
         
         if (s == "" || s == ".")
+        {
+            schema_debug_Message("s is '' or .; continuing");
             continue;
+        }
         if (s == "..")
         {
             if (JsonGetLength(jaStack) > 0)
                 jaStack = JsonArrayGetRange(jaStack, 0, -2);
             continue;
         }
-        jaStack = JsonArrayInsert(jaStack, JsonString(s), JsonGetLength(jaStack));
+
+        jaStack = JsonArrayInsert(jaStack, JsonString(s));
     }
 
     return schema_scope_Construct(jaStack);
@@ -1462,7 +1550,7 @@ json schema_reference_GetSchema(string sSchemaID)
     schema_core_CreateTables();
 
     string s = r"
-        SELECT * 
+        SELECT schema 
         FROM schema_schema
         WHERE schema_id = :id
             OR schema_id = :id || '#';
@@ -1614,238 +1702,43 @@ int schema_reference_CheckMatch(json jaMatch, json jaCriteria)
 
 /// @private Resolve a $ref.  This function follows closesly the uri resolution
 ///     algorithm defined in RFC 3986, Section 5.2.  It handles both absolute and
-///     relative references, as well as fragment-only references.  Additionally, it
-///     handles a special case where the absolute uri cannot be determined, so any
-///     path, query or fragment segments can be used to load a stored schema or parse
-///     a json file with the same name.
+///     relative references, as well as fragment-only references.
 /// @param joSchema The base schema to resolve the reference against.
 /// @param jsRef The $ref json object to resolve.
 /// @returns The resolved schema, or the base schema if no resolution is possible.
 json schema_reference_ResolveRef(json joSchema, json jsRef)
 {
     json joBaseSchema = schema_scope_GetBaseSchema();
-
     string sRef = JsonGetString(jsRef);
-    if (sRef == "" || sRef == "#")
-        return joBaseSchema;
-
-    /// @note This regex and match definitions can be found in RFC 3896,
-    ///     Appendix B.  This regex returns 9 matches in addition to the
-    ///     base match.
-    string r = "^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?$";
-    json jaMatchRef = RegExpMatch(r, sRef);
-
-    /// @note Handle fragment-only references.  These references
-    ///     should exist within the base schema.
-    if (schema_reference_CheckMatch(jaMatchRef, JsonParse("[-1,0,0,0,0,0,0,0,1,1]")))
-        //return schema_reference_ResolveFragment(joSchema, JsonGetString(JsonArrayGet(jaMatchRef, 9)));
-        return schema_reference_ResolveFragment(joBaseSchema, JsonGetString(JsonArrayGet(jaMatchRef, 9)));
-
-    /// @note A resource's absolute uri is determined by RFC 3896, paragraph 5.1,
-    ///     Appendix A (uri grammar), and Appendix B (parsing).  An absolute uri is
-    ///     required if the uri fragment is relative.
-    /// @note Find the absolute uri from either:
-    ///     1) the absolute uri from the $ref
-    ///     2) the absolute uri from the schema's $id
-    ///     If neither of those two exists, an absolute uri cannot be determined
-    ///         and further resolution is not possible.
-    string sAbsoluteURI, sTargetURI;
-    if (JsonGetType(jaMatchRef) != JSON_TYPE_NULL && jaMatchRef != JsonArray())
+    
+    string sBaseURI = JsonGetString(JsonObjectGet(joBaseSchema, "$id"));
+    if (sBaseURI == "") sBaseURI = JsonGetString(JsonObjectGet(joBaseSchema, "id"));
+    
+    string sFullURI = schema_reference_ResolveURI(sBaseURI, sRef);
+    
+    int nFragmentPos = FindSubString(sFullURI, "#");
+    string sSchemaID = sFullURI;
+    string sFragment = "";
+    
+    if (nFragmentPos != -1)
     {
-        /// @note 1) the absolute uri from the $ref
-        string s1 = JsonGetString(JsonArrayGet(jaMatchRef, 1));
-        string s2 = JsonGetString(JsonArrayGet(jaMatchRef, 2));
-        string s3 = JsonGetString(JsonArrayGet(jaMatchRef, 3));
-        string s5 = JsonGetString(JsonArrayGet(jaMatchRef, 5));
-        string s6 = JsonGetString(JsonArrayGet(jaMatchRef, 6));
-
-        if (GetStringRight(s1, 1) == ":" && s2 != "")
-            sAbsoluteURI = s1 + s3 + s5 + s6;
+        sSchemaID = GetStringLeft(sFullURI, nFragmentPos);
+        sFragment = GetStringRight(sFullURI, GetStringLength(sFullURI) - nFragmentPos - 1);
     }
+    
+    json joTargetSchema;
+    if (sSchemaID == "" || sSchemaID == sBaseURI)
+        joTargetSchema = joBaseSchema;
     else
-    {
-        /// @todo
-        ///    [ ] remove repeated code
-        ///    [ ] add function oget to $id or id, since we're supporting older drafts
-
-        /// @note 2) the absolute uri from the schema's $id
-        json jaMatchSchema = RegExpMatch(r, JsonGetString(JsonObjectGet(joBaseSchema, "$id")));
-        //json jaMatchSchema = RegExpMatch(r, JsonGetString(JsonObjectGet(joSchema, "$id")));
-        if (JsonGetType(jaMatchSchema) != JSON_TYPE_NULL && jaMatchSchema != JsonArray())
-        {
-            string s1 = JsonGetString(JsonArrayGet(jaMatchSchema, 1));
-            string s2 = JsonGetString(JsonArrayGet(jaMatchSchema, 2));
-            string s3 = JsonGetString(JsonArrayGet(jaMatchSchema, 3));
-            string s5 = JsonGetString(JsonArrayGet(jaMatchSchema, 5));
-            string s6 = JsonGetString(JsonArrayGet(jaMatchSchema, 6));
-
-            if (GetStringRight(s1, 1) == ":" && s2 != "")
-                sAbsoluteURI = s1 + s3 + s5 + s6;
-        }
-    }
-
-    /// @note If the absolute uri is a self-reference, the analysis can be
-    ///     simplified to the current schema and fragment resolution, if any.
-    string sSchemaID = JsonGetString(JsonObjectGet(joBaseSchema, "$id"));
-    //string sSchemaID = JsonGetString(JsonObjectGet(joSchema, "$id"));
-    if (sSchemaID != "" && sAbsoluteURI == sSchemaID)
-    {
-        string sFragment = JsonGetString(JsonArrayGet(jaMatchRef, 9));
-        if (sFragment != "")
-            //return schema_reference_ResolveFragment(joSchema, sFragment);
-            return schema_reference_ResolveFragment(joBaseSchema, sFragment);
-        else
-            return joBaseSchema;
-            //return joSchema;
-    }
-
-    /// @todo
-    ///    [ ] $id retrieved several times, do it once.
-
-    /// @note Handle a special, non-specification, case:
-    ///     - The absolute uri cannot be determined AND EITHER
-    ///        1) The reference matches -> path [ "?" query ] [ "#" fragment ]
-    ///             - Combine the path [ "?" query ] segments of the reference
-    ///                 and attemp to load a stored schema or parse a json file
-    ///                 with the same name
-    ///
-    ///        OR
-    ///
-    ///        2) The reference matches -> "?" query [ "#" fragment ]
-    ///             - If the schema's $id property contains matches
-    ///                 path [ "?" query ], parse the path and combine with the
-    ///                 reference's query section, then attempt to load a stored schema
-    ///                 of parse a json file with the same name
-    if (sAbsoluteURI == "")
-    {
-        if (schema_reference_CheckMatch(jaMatchRef, JsonParse("[-1,0,0,0,0,1,-1,-1,-1,-1]")))
-        {
-            /// @note Reference matches -> path [ "?" query ] [ "#" fragment ] grammar.
-            ///     Use path + query construct and attempt to load a stored schema or
-            ///     parse a json file with the same name
-            string sSchema = 
-                JsonGetString(JsonArrayGet(jaMatchRef, 5)) +
-                JsonGetString(JsonArrayGet(jaMatchRef, 6));
-
-            json joSchema = (sSchema != "") ? schema_reference_GetSchema(sSchema) : JsonNull();
-            if (JsonGetType(joSchema) == JSON_TYPE_NULL)
-                return JsonNull();
-
-            string sFragment = JsonGetString(JsonArrayGet(jaMatchRef, 9));
-            if (sFragment != "")
-                return schema_reference_ResolveFragment(joSchema, sFragment);
-            else
-                return joSchema;
-        }
-        else if (schema_reference_CheckMatch(jaMatchRef, JsonParse("[-1,0,0,0,0,0,1,1,-1,-1]")))
-        {
-            /// @note Reference matches -> "?" query [ "#" fragment ] grammar.  Check if the
-            ///     schema's $id matches -> path [ "?" query ] grammar.  If so, use
-            ///     schema.path + reference.query construct and attempt to load a stored
-            ///     schema or parse a json file with the same name
-            string sID = JsonGetString(JsonObjectGet(joBaseSchema, "$id"));
-            //string sID = JsonGetString(JsonObjectGet(joSchema, "$id"));
-            if (sID != "")
-            {
-                json jaMatch = RegExpMatch(r, sID);
-                if (schema_reference_CheckMatch(jaMatch, JsonParse("[-1,0,0,0,0,1,-1,-1,-1,-1]")))
-                {
-                    string sSchema =
-                        JsonGetString(JsonArrayGet(jaMatch, 5)) +
-                        JsonGetString(JsonArrayGet(jaMatchRef, 6));
-
-                    json joSchema = (sSchema != "") ? schema_reference_GetSchema(sSchema) : JsonNull();
-                    if (JsonGetType(joSchema) == JSON_TYPE_NULL)
-                        return JsonNull();
-
-                    string sFragment = JsonGetString(JsonArrayGet(jaMatchRef, 9));
-                    if (sFragment != "")
-                        return schema_reference_ResolveFragment(joSchema, sFragment);
-                    else
-                        return joSchema;
-                }
-            }
-        }
-
-        /// @note The special case is not satisfied and the absolute uri cannot be resolved.  No
-        ///     further resolution is possible.
+        joTargetSchema = schema_reference_GetSchema(sSchemaID);
+    
+    if (JsonGetType(joTargetSchema) == JSON_TYPE_NULL)
         return JsonNull();
-    }
-    else
-    {
-        /// @note An absolute URI exists.  If this code is reached:
-        ///     - reference is relative
-        ///     - absolute uri has been resolved
-        ///     The absolute uri must be rebuilt to include the relative portion of the
-        ///         reference, including any query segment, without the fragment segment
-        json jaMatchBase = RegExpMatch(r, sAbsoluteURI);
-        if (JsonGetString(JsonArrayGet(jaMatchRef, 1)) != "")
-        {
-            sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 1));
-            sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 3));
-            sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
-            sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6));
-        }
-        else
-        {
-            if (JsonGetString(JsonArrayGet(jaMatchRef, 3)) != "")
-            {
-                sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 3));
-                sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
-                sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6));
-            }
-            else
-            {
-                if (JsonGetString(JsonArrayGet(jaMatchRef, 5)) == "")
-                {
-                    sTargetURI += JsonGetString(JsonArrayGet(jaMatchBase, 5));
-                    if (JsonGetString(JsonArrayGet(jaMatchRef, 6)) != "")
-                        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6));
-                    else
-                        sTargetURI += JsonGetString(JsonArrayGet(jaMatchBase, 6));
-                }
-                else
-                {
-                    if (GetStringLeft(JsonGetString(JsonArrayGet(jaMatchRef, 5)), 1) == "/")
-                        sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5)));
-                    else 
-                    {
-                        sTargetURI += schema_reference_MergePath(jaMatchBase, JsonGetString(JsonArrayGet(jaMatchRef, 5)));
-                        sTargetURI = schema_reference_NormalizePath(sTargetURI);
-                    }
-                    sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6));
-                }
-                sTargetURI = JsonGetString(JsonArrayGet(jaMatchBase, 3)) + sTargetURI;
-            }
-            sTargetURI = JsonGetString(JsonArrayGet(jaMatchBase, 1)) + sTargetURI;
-        }
-        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 8));
-    }
-
-    /// @note The absolute uri has been derived.  The schema source can be retrieved
-    ///     and fragment, if any, resolved.
-    json jaMatchTarget = RegExpMatch("^(.*?)#?(.*)$", sTargetURI);
-    if (JsonGetType(jaMatchTarget) != JSON_TYPE_NULL && jaMatchTarget != JsonArray())
-    {
-        string sSchema = JsonGetString(JsonArrayGet(jaMatchTarget, 1));
-        string sFragment = JsonGetString(JsonArrayGet(jaMatchTarget, 2));
-
-        if (sSchema == "")
-            return JsonNull();
-        else
-        {
-            json joSchema = schema_reference_GetSchema(sSchema);
-            if (JsonGetType(joSchema) == JSON_TYPE_NULL)
-                return JsonNull();
-
-            if (sFragment == "")
-                return joSchema;
-            else
-                return schema_reference_ResolveFragment(joSchema, sFragment);
-        }
-    }
-
-    return JsonNull();
+        
+    if (sFragment == "")
+        return joTargetSchema;
+        
+    return schema_reference_ResolveFragment(joTargetSchema, sFragment);
 }
 
 /// @todo
@@ -3657,11 +3550,13 @@ json schema_core_Validate(json jInstance, json joSchema)
     ///     every time we come through here since this is super-recursive.
     /// @brief Keep track of the current schema.  $schema should only be present in the root note
     ///     of any schema, so if it's present, assume that we're starting a new validation.
+    int nLexicalScopes = 0;
     string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
     if (sSchema != "")
     {
         schema_scope_PushSchema(sSchema);
         schema_scope_SetBaseSchema(joSchema);
+        nLexicalScopes++;
         SetLocalJson(GetModule(), "SCHEMA_KEYWORD_MAP", schema_keyword_LoadTypeMap(sSchema));
     }
 
@@ -3674,6 +3569,39 @@ json schema_core_Validate(json jInstance, json joSchema)
     int nDraft = JsonGetInt(schema_scope_GetSchema());
     if (nDraft == 0)
         nDraft = SCHEMA_DRAFT_LATEST;
+
+    // Handle $id (or id) to establish new Base URI context
+    string sID = JsonGetString(JsonObjectGet(joSchema, "$id"));
+    if (sID == "" && nDraft < SCHEMA_DRAFT_2019_09)
+        sID = JsonGetString(JsonObjectGet(joSchema, "id"));
+
+    if (sID != "")
+    {
+        // Resolve ID against current base schema
+        json joBase = schema_scope_GetBaseSchema();
+        string sBaseURI = JsonGetString(JsonObjectGet(joBase, "$id"));
+        if (sBaseURI == "" && nDraft < SCHEMA_DRAFT_2019_09)
+            sBaseURI = JsonGetString(JsonObjectGet(joBase, "id"));
+        
+        // If we have a base URI, resolve the new ID against it
+        if (sBaseURI != "")
+        {
+            sID = schema_reference_ResolveURI(sBaseURI, sID);
+            // Update the schema object with the absolute ID for the scope
+            // We create a shallow copy with the updated ID to push to the stack
+            // This ensures children resolve against the absolute URI
+            json joNewScope = JsonObjectSet(joSchema, "$id", JsonString(sID));
+            schema_scope_PushLexical(joNewScope);
+            nLexicalScopes++;
+        }
+        else
+        {
+            // If no base URI (e.g. root with relative ID?), just push as is
+            // But usually root has absolute ID or we treat it as such
+            schema_scope_PushLexical(joSchema);
+            nLexicalScopes++;
+        }
+    }
 
     int bDynamicAnchor = FALSE;
     if (JsonFind(jaSchemaKeys, JsonString("$dynamicAnchor")) != JsonNull() ||
@@ -3742,6 +3670,12 @@ json schema_core_Validate(json jInstance, json joSchema)
         {
             if (bDynamicAnchor)
                 schema_scope_PopDynamic();
+            
+            while (nLexicalScopes > 0)
+            {
+                schema_scope_PopLexical();
+                nLexicalScopes--;
+            }
 
             return joOutputUnit;
         }
@@ -4007,6 +3941,12 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     if (bDynamicAnchor)
         schema_scope_PopDynamic();
+
+    while (nLexicalScopes > 0)
+    {
+        schema_scope_PopLexical();
+        nLexicalScopes--;
+    }
 
     schema_debug_Output("6", joOutputUnit, TRUE);
 
