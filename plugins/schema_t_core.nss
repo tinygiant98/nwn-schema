@@ -156,7 +156,7 @@ void schema_suite_RunTestSuiteFromFile()
 ///     metaschema without including additional files.  Official drafts are not expected to change, so this
 ///     function should only require updating when a new official meta schema is released by json-schema.org.
 /// @todo This probably belongs in util_c_schema once everything is packaged up. 
-json schema_core_GetTrustedSchema()
+json schema_core_GetTrustedSchema(int bLoadTestSuiteFiles = FALSE)
 {
     json jaTrustedSchema = JsonArray();
 

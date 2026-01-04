@@ -577,13 +577,7 @@ void schema_scope_PopKeymap()       {schema_scope_Pop("SCHEMA_SCOPE_KEYMAP");}
 
 void schema_scope_PopContext()
 {
-    string sScopeKey = "SCHEMA_SCOPE_CONTEXT";
-
-    json jaContext = JsonArray();
-    while (JsonGetLength(jaContext) < JsonGetLength(jaContextKeys))
-        jaContext = JsonArrayInsert(jaContext, JsonObjectGet(joScopes, sScopeKey));
-
-    schema_scope_PushArrayItem(sScopeKey, jaContext);
+    schema_scope_Pop("SCHEMA_SCOPE_CONTEXT");
 }
 
 void schema_scope_ReplaceSchemaPath(string sPath)
@@ -3317,6 +3311,9 @@ json schema_validate_AllOf(json jInstance, json jSchema, int bAnnotate = FALSE)
     json joOutputUnit = schema_output_GetOutputUnit();
     string sSource = __FUNCTION__;
 
+    json jaEvaluatedProperties = JsonArray();
+    json jaEvaluatedItems = JsonArray();
+
     int i; for (; i < JsonGetLength(jSchema); i++)
     {
         schema_scope_PushSchemaPath(IntToString(i));
@@ -3324,8 +3321,11 @@ json schema_validate_AllOf(json jInstance, json jSchema, int bAnnotate = FALSE)
         json joResult = schema_core_Validate(jInstance, JsonArrayGet(jSchema, i));
         if (schema_output_GetValid(joResult))
         {
-            schema_scope_PushContext("SCOPE_CONTEXT_EVALUATED_PROPERTIES", schema_output_GetEvaluatedProperties(joResult));
-            schema_scope_PushContext("SCOPE_CONTEXT_EVALUATED_ITEMS", schema_output_GetEvaluatedItems(joResult));
+            if (bAnnotate)
+            {
+                jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joResult));
+                jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(joResult));
+            }
         }
 
         joOutputUnit = schema_output_InsertResult(joOutputUnit, joResult, sSource);
@@ -3334,16 +3334,13 @@ json schema_validate_AllOf(json jInstance, json jSchema, int bAnnotate = FALSE)
 
     if (bAnnotate && schema_output_GetValid(joOutputUnit))
     {
-        json jaEvaluatedKeys = schema_scope_GetContext("SCHEMA_CONTEXT_EVALUATED_PROPERTIES");
-        if (JsonGetLength(jaEvaluatedKeys) > 0)
-            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedProperties", jaEvaluatedKeys);
+        if (JsonGetLength(jaEvaluatedProperties) > 0)
+            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedProperties", jaEvaluatedProperties);
 
-        jaEvaluatedKeys = schema_scope_GetContext("SCHEMA_CONTEXT_EVALUATED_ITEMS");
-        if (JsonGetLength(jaEvaluatedKeys) > 0)
-            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedItems", jaEvaluatedKeys);
+        if (JsonGetLength(jaEvaluatedItems) > 0)
+            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedItems", jaEvaluatedItems);
     }
 
-    schema_scope_PopContext();
     schema_debug_ExitFunction(__FUNCTION__);
     return joOutputUnit;
 }
@@ -3463,6 +3460,9 @@ json schema_validate_If(json jInstance, json joIf, json joThen, json joElse, int
     string sKeyword = "if";
     schema_scope_PushSchemaPath(sKeyword);
 
+    json jaEvaluatedProperties = JsonArray();
+    json jaEvaluatedItems = JsonArray();
+
     int bIf, nKeywordType = JsonGetType(joIf);
     if (nKeywordType == JSON_TYPE_BOOL)
     {
@@ -3475,6 +3475,12 @@ json schema_validate_If(json jInstance, json joIf, json joThen, json joElse, int
         joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, joResult, sSource);
 
         bIf = schema_output_GetValid(joResult);
+
+        if (bAnnotate && bIf)
+        {
+            jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joResult));
+            jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(joResult));
+        }
     }
 
     schema_scope_PopSchemaPath();
@@ -3504,14 +3510,18 @@ json schema_validate_If(json jInstance, json joIf, json joThen, json joElse, int
 
         if (bAnnotate && schema_output_GetValid(joResult))
         {
-            json jaEvaluatedKeys = schema_output_GetEvaluatedProperties(joResult);
-            if (JsonGetLength(jaEvaluatedKeys) > 0)
-                joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedProperties", schema_output_GetEvaluatedProperties(joResult));
-            
-            jaEvaluatedKeys = schema_output_GetEvaluatedItems(joResult);
-            if (JsonGetLength(jaEvaluatedKeys) > 0)
-                joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedItems", schema_output_GetEvaluatedItems(joResult));
+            jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joResult));
+            jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(joResult));
         }
+    }
+
+    if (bAnnotate)
+    {
+        if (JsonGetLength(jaEvaluatedProperties) > 0)
+            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedProperties", jaEvaluatedProperties);
+
+        if (JsonGetLength(jaEvaluatedItems) > 0)
+            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedItems", jaEvaluatedItems);
     }
 
     schema_scope_PopSchemaPath();
