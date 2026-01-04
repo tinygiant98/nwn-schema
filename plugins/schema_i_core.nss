@@ -3169,10 +3169,14 @@ json schema_validate_Object(
                             joResult = schema_core_Validate(joInstance, joSchema);
                 
                         joOutputUnit = schema_output_InsertResult(joOutputUnit, joResult, sSource);
-                    }
 
-                    if (bAnnotate)
-                        jaEvaluatedProperties = JsonArrayInsert(jaEvaluatedProperties, JsonString(sSchemaKey));
+                        if (bAnnotate && schema_output_GetValid(joResult))
+                        {
+                            jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joResult));
+                            // dependentSchemas only applies to objects, so we don't need to check for evaluatedItems
+                            // unless the subschema somehow evaluated items on the object instance (which is impossible)
+                        }
+                    }
                 }
 
                 schema_scope_PopSchemaPath();
@@ -3591,6 +3595,8 @@ json schema_core_Validate(json jInstance, json joSchema)
     schema_debug_Argument(__FUNCTION__, "schema", joSchema);
 
     json joOutputUnit = schema_output_GetOutputUnit();
+    json jaEvaluatedProperties = JsonArray();
+    json jaEvaluatedItems = JsonArray();
 
     if (JsonGetType(joSchema) == JSON_TYPE_NULL)
     {
@@ -3746,7 +3752,14 @@ json schema_core_Validate(json jInstance, json joSchema)
         if (JsonGetType(jResult) != JSON_TYPE_NULL)
         {
             if (schema_output_GetValid(jResult))
+            {
                 joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, jResult);
+                if (nDraft >= SCHEMA_DRAFT_2019_09)
+                {
+                    jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(jResult));
+                    jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(jResult));
+                }
+            }
             else
                 joOutputUnit = schema_output_InsertError(joOutputUnit, jResult);
         }
@@ -3976,9 +3989,16 @@ json schema_core_Validate(json jInstance, json joSchema)
 
             int j; for (; j < nResultLength; j++)
             {
+                json joRes = JsonArrayGet(jResult, j);
                 joOutputUnit = i == nResultLength ? 
-                    schema_output_InsertAnnotation(joOutputUnit, JsonArrayGet(jResult, j)) :
-                    schema_output_InsertError(joOutputUnit, JsonArrayGet(jResult, j));
+                    schema_output_InsertAnnotation(joOutputUnit, joRes) :
+                    schema_output_InsertError(joOutputUnit, joRes);
+
+                if (i == nResultLength && nDraft >= SCHEMA_DRAFT_2019_09)
+                {
+                    jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joRes));
+                    jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(joRes));
+                }
             }
             
             if (SOURCE)
@@ -3999,7 +4019,14 @@ json schema_core_Validate(json jInstance, json joSchema)
             string sSource = __FUNCTION__ + " (object)";
 
             if (schema_output_GetValid(jResult))
+            {
                 joOutputUnit = schema_output_InsertAnnotation(joOutputUnit, jResult, sSource);
+                if (nDraft >= SCHEMA_DRAFT_2019_09)
+                {
+                    jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(jResult));
+                    jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(jResult));
+                }
+            }
             else
                 joOutputUnit = schema_output_InsertError(joOutputUnit, jResult, sSource);
         }
@@ -4009,6 +4036,15 @@ json schema_core_Validate(json jInstance, json joSchema)
             /// @todo
             ///     [ ] When integrating joResult, we'll make JsonNull() mean that the keyword is not handled and/or supported?
         }
+    }
+
+    if (nDraft >= SCHEMA_DRAFT_2019_09 && schema_output_GetValid(joOutputUnit))
+    {
+        if (JsonGetLength(jaEvaluatedProperties) > 0)
+            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedProperties", jaEvaluatedProperties);
+
+        if (JsonGetLength(jaEvaluatedItems) > 0)
+            joOutputUnit = schema_output_SetAnnotation(joOutputUnit, "evaluatedItems", jaEvaluatedItems);
     }
 
     /// @todo
