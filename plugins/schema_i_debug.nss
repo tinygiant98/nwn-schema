@@ -1,6 +1,9 @@
 #include "util_i_debug"
 
-int DEBUG=FALSE;
+int _debug()
+{
+    return GetLocalInt(GetModule(), "_debug");
+}
 
 void schema_debug_Indent()
 {
@@ -26,58 +29,36 @@ string schema_debug_GetIndent()
     return s;
 }
 
-void schema_debug_EnterFunction(string sFunction)
-{
-    if (!DEBUG) return;
-
-    int n = GetLocalInt(GetModule(), sFunction);
-    SetLocalInt(GetModule(), sFunction, ++n);
-    Debug(schema_debug_GetIndent() + HexColorString("-> " + sFunction, COLOR_GREEN_LIGHT) + " " + HexColorString("(" + IntToString(n) + ")", COLOR_BLUE_LIGHT));
-
-    schema_debug_Indent();
-}
-
-void schema_debug_ExitFunction(string sFunction)
-{
-    if (!DEBUG) return;
-
-    schema_debug_Outdent();
-
-    int n = GetLocalInt(GetModule(), sFunction);
-    Debug(schema_debug_GetIndent() + HexColorString("<- " + sFunction, COLOR_RED_LIGHT) + " " + HexColorString("(" + IntToString(n) + ")", COLOR_BLUE_LIGHT));
-    SetLocalInt(GetModule(), sFunction, --n);
-}
-
 void schema_debug_Argument(string sFunction, string sArg, json jValue)
 {
-    if (!DEBUG) return;
+    if (!_debug()) return;
 
     Debug(schema_debug_GetIndent() + HexColorString(sArg + ": ", COLOR_BLUE_STEEL) + HexColorString(JsonDump(jValue), COLOR_BLUE_LIGHT));
 }
 
 void schema_debug_Message(string sMessage)
 {
-    if (!DEBUG) return;
+    if (!_debug()) return;
 
     Debug(schema_debug_GetIndent() + sMessage);
 }
 
 void schema_debug_Value(string sTitle, string sValue)
 {
-    if (!DEBUG) return;
+    if (!_debug()) return;
     Debug(schema_debug_GetIndent() + sTitle + " = " + HexColorString(sValue, COLOR_MAGENTA));
 }
 
 void schema_debug_Json(string sTitle, json jValue)
 {
-    if (!DEBUG) return;
+    if (!_debug()) return;
     Debug(schema_debug_GetIndent() + sTitle);
     Debug(HexColorString(JsonDump(jValue, 4), COLOR_SALMON));
 }
 
 void schema_debug_Output(string sTitle, json joOutputUnit, int bID = FALSE)
 {
-    if (!DEBUG) return;
+    if (!_debug()) return;
 
     Debug(schema_debug_GetIndent() + "Output validity @ " + sTitle + " = " +
         HexColorString(JsonObjectGet(joOutputUnit, "valid") == JSON_TRUE ? "TRUE" : "FALSE", COLOR_ORANGE) +
@@ -100,4 +81,29 @@ void schema_debug_Type(string sTitle, json jValue)
     }
 
     Debug(schema_debug_GetIndent() + sTitle + " type = " + HexColorString(sType, COLOR_CYAN_DARK));
+}
+
+void schema_debug_EnterFunction(string sFunction)
+{
+    if (!_debug()) return;
+
+    int n = GetLocalInt(GetModule(), sFunction);
+    SetLocalInt(GetModule(), sFunction, ++n);
+    Debug(schema_debug_GetIndent() + HexColorString("-> " + sFunction, COLOR_GREEN_LIGHT) + " " + HexColorString("(" + IntToString(n) + ")", COLOR_BLUE_LIGHT));
+
+    schema_debug_Indent();
+}
+
+void schema_debug_ExitFunction(string sFunction, string sMessage = "")
+{
+    if (!_debug()) return;
+
+    if (sMessage != "")
+        schema_debug_Message(sMessage);
+
+    schema_debug_Outdent();
+
+    int n = GetLocalInt(GetModule(), sFunction);
+    Debug(schema_debug_GetIndent() + HexColorString("<- " + sFunction, COLOR_RED_LIGHT) + " " + HexColorString("(" + IntToString(n) + ")", COLOR_BLUE_LIGHT));
+    SetLocalInt(GetModule(), sFunction, --n);
 }

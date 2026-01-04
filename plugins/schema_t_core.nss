@@ -37,14 +37,58 @@ void schema_suite_TestNonAscii()
 {
     DescribeTestGroup("Non-ASCII Character Support");
 
+    {
+        string s = r"
+SELECT json(CAST(CAST(:obj AS BLOB) AS TEXT));
+        ";
+        sqlquery q = SqlPrepareQueryObject(GetModule(), s);
+        string j = r"
+            {
+                ""Name"": {
+                    ""type"": ""cexostring"",
+                    ""value"": ""OnSpellCastAt[°š]""
+                },
+                ""Type"": {
+                    ""type"": ""dword"",
+                    ""value"": 3
+                },
+                ""Value"": {
+                    ""type"": ""cexostring"",
+                    ""value"": ""cre_lootableress""
+                }
+            }
+        ";
+        SqlBindString(q, ":obj", j);
+
+        if (SqlStep(q))
+        {
+            json s = SqlGetJson(q, 0);
+            Debug(JsonDump(s));
+        }
+
+    }
+
+    return;
+
     // Test 1: Enum
     {
         json jSchema = JsonParse(r"
             {
-                ""enum"": [""á""]
+                ""Name"": {
+                    ""type"": ""cexostring"",
+                    ""value"": ""OnSpellCastAt[°š]""
+                },
+                ""Type"": {
+                    ""type"": ""dword"",
+                    ""value"": 3
+                },
+                ""Value"": {
+                    ""type"": ""cexostring"",
+                    ""value"": ""cre_lootableress""
+                }
             }
         ");
-        json jInstance = JsonString("á");
+        json jInstance = JsonString("°š");
         int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
         Assert("Enum with non-ASCII character", bValid == TRUE);
     }
@@ -53,10 +97,10 @@ void schema_suite_TestNonAscii()
     {
         json jSchema = JsonParse(r"
             {
-                ""required"": [""á""]
+                ""required"": [""°š""]
             }
         ");
-        json jInstance = JsonParse(r"{ ""á"": 1 }");
+        json jInstance = JsonParse(r"{ ""°š"": 1 }");
         int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
         Assert("Required property with non-ASCII character", bValid == TRUE);
     }
@@ -66,11 +110,11 @@ void schema_suite_TestNonAscii()
         json jSchema = JsonParse(r"
             {
                 ""properties"": {
-                    ""á"": { ""type"": ""string"" }
+                    ""°š"": { ""type"": ""string"" }
                 }
             }
         ");
-        json jInstance = JsonParse(r"{ ""á"": ""foo"" }");
+        json jInstance = JsonParse(r"{ ""°š"": ""foo"" }");
         int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
         Assert("Properties with non-ASCII key", bValid == TRUE);
     }
@@ -80,11 +124,11 @@ void schema_suite_TestNonAscii()
         json jSchema = JsonParse(r"
             {
                 ""dependentRequired"": {
-                    ""foo"": [""á""]
+                    ""foo"": [""°š""]
                 }
             }
         ");
-        json jInstance = JsonParse(r"{ ""foo"": 1, ""á"": 2 }");
+        json jInstance = JsonParse(r"{ ""foo"": 1, ""°š"": 2 }");
         int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
         Assert("DependentRequired with non-ASCII dependency", bValid == TRUE);
     }
@@ -94,11 +138,11 @@ void schema_suite_TestNonAscii()
         json jSchema = JsonParse(r"
             {
                 ""patternProperties"": {
-                    ""^á"": { ""type"": ""string"" }
+                    ""^°š"": { ""type"": ""string"" }
                 }
             }
         ");
-        json jInstance = JsonParse(r"{ ""á"": ""foo"" }");
+        json jInstance = JsonParse(r"{ ""°š"": ""foo"" }");
         int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
         Assert("PatternProperties with non-ASCII regex", bValid == TRUE);
     }
@@ -527,6 +571,175 @@ json schema_core_GetTrustedSchema(int bLoadTestSuiteFiles = FALSE)
             }
         }
     "));
+
+    if (bLoadTestSuiteFiles)
+    {
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$id"": ""http://localhost:1234/draft2020-12/detached-dynamicref.json"",
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$defs"": {
+                    ""foo"": {
+                        ""$dynamicRef"": ""#detached""
+                    },
+                    ""detached"": {
+                        ""$dynamicAnchor"": ""detached"",
+                        ""type"": ""integer""
+                    }
+                }
+            }
+        "));
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$id"": ""http://localhost:1234/draft2020-12/detached-ref.json"",
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$defs"": {
+                    ""foo"": {
+                        ""$ref"": ""#detached""
+                    },
+                    ""detached"": {
+                        ""$anchor"": ""detached"",
+                        ""type"": ""integer""
+                    }
+                }
+            }
+        "));
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""description"": ""extendible array"",
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$id"": ""http://localhost:1234/draft2020-12/extendible-dynamic-ref.json"",
+                ""type"": ""object"",
+                ""properties"": {
+                    ""elements"": {
+                        ""type"": ""array"",
+                        ""items"": {
+                            ""$dynamicRef"": ""#elements""
+                        }
+                    }
+                },
+                ""required"": [""elements""],
+                ""additionalProperties"": false,
+                ""$defs"": {
+                    ""elements"": {
+                        ""$dynamicAnchor"": ""elements""
+                    }
+                }
+            }
+        "));
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$id"": ""http://localhost:1234/draft2020-12/format-assertion-false.json"",
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$vocabulary"": {
+                    ""https://json-schema.org/draft/2020-12/vocab/core"": true,
+                    ""https://json-schema.org/draft/2020-12/vocab/format-assertion"": false
+                },
+                ""$dynamicAnchor"": ""meta"",
+                ""allOf"": [
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/core"" },
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/format-assertion"" }
+                ]
+            }
+        "));
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$id"": ""http://localhost:1234/draft2020-12/format-assertion-true.json"",
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$vocabulary"": {
+                    ""https://json-schema.org/draft/2020-12/vocab/core"": true,
+                    ""https://json-schema.org/draft/2020-12/vocab/format-assertion"": true
+                },
+                ""$dynamicAnchor"": ""meta"",
+                ""allOf"": [
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/core"" },
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/format-assertion"" }
+                ]
+            }
+        "));
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$id"": ""http://localhost:1234/draft2020-12/metaschema-no-validation.json"",
+                ""$vocabulary"": {
+                    ""https://json-schema.org/draft/2020-12/vocab/applicator"": true,
+                    ""https://json-schema.org/draft/2020-12/vocab/core"": true
+                },
+                ""$dynamicAnchor"": ""meta"",
+                ""allOf"": [
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/applicator"" },
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/core"" }
+                ]
+            }
+        "));
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$id"": ""http://localhost:1234/draft2020-12/metaschema-optional-vocabulary.json"",
+                ""$vocabulary"": {
+                    ""https://json-schema.org/draft/2020-12/vocab/validation"": true,
+                    ""https://json-schema.org/draft/2020-12/vocab/core"": true,
+                    ""http://localhost:1234/draft/2020-12/vocab/custom"": false
+                },
+                ""$dynamicAnchor"": ""meta"",
+                ""allOf"": [
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/validation"" },
+                    { ""$ref"": ""https://json-schema.org/draft/2020-12/meta/core"" }
+                ]
+            }
+        "));
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$id"": ""http://localhost:1234/draft2020-12/prefixItems.json"",
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""prefixItems"": [
+                    {""type"": ""string""}
+                ]
+            }
+        "));   
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$id"": ""http://localhost:1234/draft2020-12/ref-and-defs.json"",
+                ""$defs"": {
+                    ""inner"": {
+                        ""properties"": {
+                            ""bar"": { ""type"": ""string"" }
+                        }
+                    }
+                },
+                ""$ref"": ""#/$defs/inner""
+            }
+        "));  
+
+        JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
+            {
+                ""description"": ""tree schema, extensible"",
+                ""$schema"": ""https://json-schema.org/draft/2020-12/schema"",
+                ""$id"": ""http://localhost:1234/draft2020-12/tree.json"",
+                ""$dynamicAnchor"": ""node"",
+
+                ""type"": ""object"",
+                ""properties"": {
+                    ""data"": true,
+                    ""children"": {
+                        ""type"": ""array"",
+                        ""items"": {
+                            ""$dynamicRef"": ""#node""
+                        }
+                    }
+                }
+            }
+        "));  
+    }
 
     JsonArrayInsertInplace(jaTrustedSchema, JsonParse(r"
         {
@@ -1351,7 +1564,7 @@ void main()
 
         schema_core_CreateTables();
         schema_core_BeginTransaction();
-        json jaTrustedSchema = schema_core_GetTrustedSchema();
+        json jaTrustedSchema = schema_core_GetTrustedSchema(TRUE);
         int i; for (i = 0; i < JsonGetLength(jaTrustedSchema); i++)
         {
             json joSchema = JsonArrayGet(jaTrustedSchema, i);

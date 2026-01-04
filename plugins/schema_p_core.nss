@@ -17,6 +17,8 @@ void schema_OnPlayerChat()
 {
     object oPC = GetPCChatSpeaker();
 
+    SetLocalInt(GetModule(), "_debug", HasChatOption(oPC, "debug"));
+
     int TEST = CountChatArguments(oPC) == 0 ? 0 : StringToInt(GetChatArgument(oPC));
     if (TEST == 0)
         ExecuteScript("schema_t_core");

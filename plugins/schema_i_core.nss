@@ -397,7 +397,7 @@ json schema_scope_GetContext(string sContextKey)
 /// @private Deconstruct a pointer string into an array of pointer segments.
 /// @param sPointer The pointer string to deconstruct.
 /// @returns A json array containing the path segments, or an empty json array if the path is empty.
-json schema_scope_Deconstruct(string sPointer)
+json schema_scope_DeconstructPointer(string sPointer)
 {
     schema_debug_EnterFunction(__FUNCTION__);
     schema_debug_Argument(__FUNCTION__, "sPointer", JsonString(sPointer));
@@ -408,7 +408,7 @@ json schema_scope_Deconstruct(string sPointer)
 
     if (sPointer == "")
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "sPointer is an empty string");
         return JsonArray();
     }
 
@@ -417,7 +417,7 @@ json schema_scope_Deconstruct(string sPointer)
         sPointer = GetStringRight(sPointer, GetStringLength(sPointer) - 1);
     else
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "sPointer is not a valid pointer");
         return JsonArray(); // JSON Pointer must start with / if not empty
     }
 
@@ -445,7 +445,7 @@ json schema_scope_Deconstruct(string sPointer)
 /// @private Construct a pointer string from a json array of pointer segments.
 /// @param jaPointer The json array containing the pointer segments.
 /// @returns A string representing the pointer, or an empty string if the input is null or empty.
-string schema_scope_Construct(json jaPointer = JSON_NULL)
+string schema_scope_ConstructPointer(json jaPointer = JSON_NULL)
 {
     if (JsonGetType(jaPointer) != JSON_TYPE_ARRAY || JsonGetLength(jaPointer) == 0)
         return "";
@@ -461,9 +461,51 @@ string schema_scope_Construct(json jaPointer = JSON_NULL)
     return sPath;
 }
 
+json schema_scope_DeconstructPath(string sPath)
+{
+    if (sPath == "") return JsonArray();
+
+    string s = r"
+        WITH RECURSIVE split(value, str, i) AS (
+            SELECT '', :str || '/', 0
+            UNION ALL
+            SELECT
+                substr(str, 0, instr(str, '/')),
+                substr(str, instr(str, '/') + 1),
+                i + 1
+            FROM split
+            WHERE str != ''
+        )
+        SELECT json_group_array(value) FROM (SELECT value FROM split WHERE str != :str || '/' ORDER BY i);
+    ";
+    sqlquery q = schema_core_PrepareQuery(s);
+    SqlBindString(q, ":str", sPath);
+    return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
+}
+
+string schema_scope_ConstructPath(json jaParts, int bAbsolute = FALSE)
+{
+    if (JsonGetType(jaParts) != JSON_TYPE_ARRAY || JsonGetLength(jaParts) == 0)
+        return bAbsolute ? "/" : "";
+
+    string sPath = "";
+    int i;
+    int nLen = JsonGetLength(jaParts);
+    for (i = 0; i < nLen; i++)
+    {
+        if (i > 0) sPath += "/";
+        sPath += JsonGetString(JsonArrayGet(jaParts, i));
+    }
+    
+    if (bAbsolute)
+        sPath = "/" + sPath;
+        
+    return sPath;
+}
+
 /// @private Convenience function to construct pointer from lexical scope members.
-string schema_scope_ConstructSchemaPath()   {return schema_scope_Construct(schema_scope_GetSchemaPath());}
-string schema_scope_ConstructInstancePath() {return schema_scope_Construct(schema_scope_GetInstancePath());}
+string schema_scope_ConstructSchemaPath()   {return schema_scope_ConstructPointer(schema_scope_GetSchemaPath());}
+string schema_scope_ConstructInstancePath() {return schema_scope_ConstructPointer(schema_scope_GetInstancePath());}
 
 /// @private Convenience functions to modify scope arrays.
 void schema_scope_PushLexical(json joScope)      {schema_scope_PushArrayItem("SCHEMA_SCOPE_LEXICAL", joScope);}
@@ -612,10 +654,11 @@ string schema_reference_ResolveURI(string sBaseURI, string sRelativeURI)
     schema_debug_Argument(__FUNCTION__, "sBaseURI", JsonString(sBaseURI));
     schema_debug_Argument(__FUNCTION__, "sRelativeURI", JsonString(sRelativeURI));
 
+    string sTargetURI;
+
     if (sRelativeURI == "" || sRelativeURI == "#")
     {
-        schema_debug_Message("sRelativeURI is empty or #");
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "sRelativeURI is an empty string or a self-reference ('#')");
         return sBaseURI;
     }
 
@@ -626,17 +669,22 @@ string schema_reference_ResolveURI(string sBaseURI, string sRelativeURI)
     // If relative URI is absolute (has scheme), return it
     if (JsonGetString(JsonArrayGet(jaMatchRef, 2)) != "")
     {
-        schema_debug_Message("sRealtiveURI has a schema; returning");
-        schema_debug_ExitFunction(__FUNCTION__);
-        return sRelativeURI;
+        // Even if absolute, we must normalize the path (RFC 3986 5.2.2)
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 1)); // Scheme
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 3)); // Authority
+        sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5))); // Path
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6)); // Query
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 8)); // Fragment
+        
+        schema_debug_ExitFunction(__FUNCTION__, "sRelativeURI has a schema; returning normalized");
+        return sTargetURI;
     }
 
     json jaMatchBase = RegExpMatch(r, sBaseURI);
-    string sTargetURI = "";
 
     if (JsonGetString(JsonArrayGet(jaMatchRef, 3)) != "") // Authority (//...)
     {
-        sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 1)); // Scheme
+        sTargetURI += JsonGetString(JsonArrayGet(jaMatchBase, 1)); // Base Scheme (RFC 3986 5.2.2)
         sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 3)); // Authority
         sTargetURI += schema_reference_NormalizePath(JsonGetString(JsonArrayGet(jaMatchRef, 5))); // Path
         sTargetURI += JsonGetString(JsonArrayGet(jaMatchRef, 6)); // Query
@@ -1388,30 +1436,54 @@ json schema_output_Detailed(json joOutputUnit)
 /// @returns A normalized path string with empty segments and hierarchical segments resolved.
 string schema_reference_NormalizePath(string sPath)
 {
-    json jaParts = schema_scope_Deconstruct(sPath);
-    json jaStack = JsonArray();
+    if (sPath == "") return "";
 
-    int i, n = JsonGetLength(jaParts);
+    int bAbsolute = (GetStringLeft(sPath, 1) == "/");
+    json jaParts = schema_scope_DeconstructPath(sPath);
+    json jaStack = JsonArray();
+    
+    int i;
+    int n = JsonGetLength(jaParts);
+    
     for (i = 0; i < n; i++)
     {
-        string s = JsonGetString(JsonArrayGet(jaParts, i));
-        s = schema_reference_UnescapePointer(s);
+        string sPart = JsonGetString(JsonArrayGet(jaParts, i));
         
-        if (s == "" || s == ".")
-        {
+        if (sPart == "" || sPart == ".")
             continue;
-        }
-        if (s == "..")
+            
+        if (sPart == "..")
         {
-            if (JsonGetLength(jaStack) > 0)
-                jaStack = JsonArrayGetRange(jaStack, 0, -2);
-            continue;
+            int nStackLen = JsonGetLength(jaStack);
+            if (nStackLen > 0)
+            {
+                string sTop = JsonGetString(JsonArrayGet(jaStack, nStackLen - 1));
+                if (sTop == "..")
+                {
+                    jaStack = JsonArrayInsert(jaStack, JsonString(sTop));
+                }
+                else
+                {
+                    // Pop
+                    json jaNew = JsonArray();
+                    int j;
+                    for (j = 0; j < nStackLen - 1; j++)
+                        jaNew = JsonArrayInsert(jaNew, JsonArrayGet(jaStack, j));
+                    jaStack = jaNew;
+                }
+            }
+            else if (!bAbsolute)
+            {
+                jaStack = JsonArrayInsert(jaStack, JsonString(".."));
+            }
         }
-
-        jaStack = JsonArrayInsert(jaStack, JsonString(s));
+        else
+        {
+            jaStack = JsonArrayInsert(jaStack, JsonString(sPart));
+        }
     }
-
-    return schema_scope_Construct(jaStack);
+    
+    return schema_scope_ConstructPath(jaStack, bAbsolute);
 }
 
 json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
@@ -1421,7 +1493,7 @@ json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
 
     if (JsonGetType(joSchema) != JSON_TYPE_OBJECT || sAnchor == "")
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "instancy type is not object or sAnchor is an empty string");
         return JsonNull();
     }
 
@@ -1437,7 +1509,7 @@ json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
             candidates AS (
                 SELECT parent AS id
                 FROM tree
-                WHERE key = '$anchor' AND atom = :anchor
+                WHERE key IN ('$anchor', '$dynamicAnchor') AND atom = :anchor
             ),
             ancestors(candidate_id, current_id) AS (
                 SELECT id, id FROM candidates
@@ -1465,17 +1537,31 @@ json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
     SqlBindString(q, ":anchor", sAnchor);
 
     json jResult = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
-    
+    schema_debug_Json("Anchor Resolution", jResult);
     schema_debug_ExitFunction(__FUNCTION__);
     return jResult;
 }
 
 json schema_reference_ResolvePointer(json joSchema, string sPointer)
 {
-    if (sPointer == "")
-        return joSchema;
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "joSchema", joSchema);
+    schema_debug_Argument(__FUNCTION__, "sPointer", JsonString(sPointer));
 
-    json jaParts = schema_scope_Deconstruct(sPointer);
+    if (sPointer == "")
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "sPointer is empty");
+        return joSchema;
+    }
+
+    // If the pointer is just "/", it resolves to the root
+    if (sPointer == "/")
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "sPointer is root");
+        return joSchema;
+    }
+
+    json jaParts = schema_scope_DeconstructPointer(sPointer);
     json jCurrent = joSchema;
     int i, n = JsonGetLength(jaParts);
 
@@ -1488,7 +1574,10 @@ json schema_reference_ResolvePointer(json joSchema, string sPointer)
         if (nType == JSON_TYPE_OBJECT)
         {
             if (!schema_util_HasKey(jCurrent, sPart))
+            {
+                schema_debug_ExitFunction(__FUNCTION__, "schema does not have desired key");
                 return JsonNull();
+            }
             jCurrent = schema_util_JsonObjectGet(jCurrent, sPart);
         }
         else if (nType == JSON_TYPE_ARRAY)
@@ -1496,15 +1585,20 @@ json schema_reference_ResolvePointer(json joSchema, string sPointer)
             int nIndex = StringToInt(sPart);
             // Check if sPart is a valid integer string and within bounds
             if (IntToString(nIndex) != sPart || nIndex < 0 || nIndex >= JsonGetLength(jCurrent))
+            {
+                schema_debug_ExitFunction(__FUNCTION__, "sPart is not a valid integer string within bounds");
                 return JsonNull();
+            }
             jCurrent = JsonArrayGet(jCurrent, nIndex);
         }
         else
         {
+            schema_debug_ExitFunction(__FUNCTION__, "nType is not valid; returning null");
             return JsonNull();
         }
     }
 
+    schema_debug_ExitFunction(__FUNCTION__);
     return jCurrent;
 }
 
@@ -1648,16 +1742,26 @@ json schema_reference_GetSchema(string sSchemaID)
 ///     could not be resolved.
 json schema_reference_ResolveFragment(json joSchema, string sFragment)
 {
+    schema_debug_EnterFunction(__FUNCTION__);
+
     sFragment = schema_reference_DecodeURI(sFragment);
 
     if (GetStringLeft(sFragment, 1) == "/")
-        return schema_reference_ResolvePointer(joSchema, sFragment);
+    {
+        json jResult = schema_reference_ResolvePointer(joSchema, sFragment);
+        schema_debug_ExitFunction(__FUNCTION__, "sFragment is a pointer");
+        return jResult;
+    }
+    else if (sFragment == "")
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "sFragment is empty");
+        return joSchema;
+    }
     else
     {
         json joAnchor = schema_reference_ResolveAnchor(joSchema, sFragment);
-        if (JsonGetType(joAnchor) == JSON_TYPE_NULL)
-            joAnchor = schema_util_JsonObjectGet(joSchema, sFragment);
-
+        
+        schema_debug_ExitFunction(__FUNCTION__);
         return joAnchor;
     }
 }
@@ -1734,6 +1838,8 @@ int schema_reference_CheckMatch(json jaMatch, json jaCriteria)
 /// @returns The resolved schema, or the base schema if no resolution is possible.
 json schema_reference_ResolveRef(json joSchema, json jsRef)
 {
+    schema_debug_EnterFunction(__FUNCTION__);
+
     json joBaseSchema = schema_scope_GetBaseSchema();
     string sRef = JsonGetString(jsRef);
     
@@ -1756,15 +1862,35 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
     if (sSchemaID == "" || sSchemaID == sBaseURI)
         joTargetSchema = joBaseSchema;
     else
-        joTargetSchema = schema_reference_GetSchema(sSchemaID);
+    {
+        // Check if the schema is already in the current ID map (internal reference)
+        json joCurrentIDMap = GetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP");
+        if (JsonGetType(joCurrentIDMap) == JSON_TYPE_OBJECT)
+        {
+            json joMapped = JsonObjectGet(joCurrentIDMap, sSchemaID);
+            if (JsonGetType(joMapped) == JSON_TYPE_OBJECT)
+                joTargetSchema = joMapped;
+        }
+
+        if (JsonGetType(joTargetSchema) == JSON_TYPE_NULL)
+            joTargetSchema = schema_reference_GetSchema(sSchemaID);
+    }
     
     if (JsonGetType(joTargetSchema) == JSON_TYPE_NULL)
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "joTargetSchema is null");
         return JsonNull();
-        
+    }
+
     if (sFragment == "")
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "sFragment is an empty string");
         return joTargetSchema;
+    }
         
-    return schema_reference_ResolveFragment(joTargetSchema, sFragment);
+    json jResult = schema_reference_ResolveFragment(joTargetSchema, sFragment);
+    schema_debug_ExitFunction(__FUNCTION__);
+    return jResult;
 }
 
 /// @todo
@@ -1776,23 +1902,60 @@ json schema_reference_ResolveRef(json joSchema, json jsRef)
 ///     json object if not found.
 json schema_reference_ResolveDynamicRef(json joSchema, json jsRef, int bRevertToRef = FALSE)
 {
-    json jaDynamic = schema_scope_GetDynamic();
-    if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
+    // 1. Static Resolution
+    json joStatic = schema_reference_ResolveRef(joSchema, jsRef);
+    
+    if (JsonGetType(joStatic) == JSON_TYPE_NULL)
         return JsonNull();
 
-    json jaSchema = JsonArrayGet(jaDynamic, schema_scope_GetDepth());
-    if (JsonGetType(jaSchema) != JSON_TYPE_OBJECT || JsonGetLength(jaSchema) == 0)
-        return JsonNull();
+    // If the static resolution is not an object (e.g. boolean schema), it cannot have a dynamic anchor,
+    // so we treat it as a normal ref and return the static resolution.
+    if (JsonGetType(joStatic) != JSON_TYPE_OBJECT)
+        return joStatic;
 
-    int i; for (i = JsonGetLength(jaSchema); i > 0; i--)
+    // 2. Check if Static Resolution has the matching dynamic anchor
+    string sRef = JsonGetString(jsRef);
+    string sAnchor = sRef;
+    int nHash = FindSubString(sRef, "#");
+    if (nHash != -1)
+        sAnchor = GetStringRight(sRef, GetStringLength(sRef) - nHash - 1);
+    
+    json jsAnchorName = JsonString(sAnchor);
+    json jsStaticAnchor = JsonObjectGet(joStatic, "$dynamicAnchor");
+
+    // If the static target is not a dynamic anchor, return it as a static ref
+    if (jsStaticAnchor != jsAnchorName)
+        return joStatic;
+
+    // 3. Dynamic Scope Search (Outermost -> Innermost)
+    json jaDynamicStack = GetLocalJson(GetModule(), "SCHEMA_SCOPE_DYNAMIC");
+    if (JsonGetType(jaDynamicStack) == JSON_TYPE_ARRAY)
     {
-        json joScope = JsonArrayGet(jaSchema, i);
-        json jsAnchor = JsonObjectGet(joScope, "$dynamicAnchor");
-        if (JsonGetType(jsAnchor) == JSON_TYPE_STRING && jsAnchor == jsRef)
-            return joScope;
+        int nDepth;
+        for (nDepth = 0; nDepth < JsonGetLength(jaDynamicStack); nDepth++)
+        {
+            json jaScopeLevel = JsonArrayGet(jaDynamicStack, nDepth);
+            if (JsonGetType(jaScopeLevel) != JSON_TYPE_ARRAY) continue;
+
+            int i;
+            for (i = 0; i < JsonGetLength(jaScopeLevel); i++)
+            {
+                json joScope = JsonArrayGet(jaScopeLevel, i);
+                
+                // We must use ResolveAnchor because the anchor might be deep inside the scope resource
+                json joDynamicMatch = schema_reference_ResolveAnchor(joScope, sAnchor);
+                if (JsonGetType(joDynamicMatch) == JSON_TYPE_OBJECT)
+                {
+                    // Ensure it is actually a dynamic anchor
+                    if (JsonObjectGet(joDynamicMatch, "$dynamicAnchor") == jsAnchorName)
+                        return joDynamicMatch;
+                }
+            }
+        }
     }
 
-    return bRevertToRef ? schema_reference_ResolveRef(joSchema, jsRef) : JsonNull();
+    // 4. Fallback to Static Resolution
+    return joStatic;
 }
 
 /// @todo
@@ -1842,9 +2005,13 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
     if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
         return joTarget;
 
-    int i; for (i = 0; i < JsonGetLength(jaDynamic); i++)
+    json jaSchema = JsonArrayGet(jaDynamic, schema_scope_GetDepth());
+    if (JsonGetType(jaSchema) != JSON_TYPE_ARRAY || JsonGetLength(jaSchema) == 0)
+        return joTarget;
+
+    int i; for (i = 0; i < JsonGetLength(jaSchema); i++)
     {
-        json joScope = JsonArrayGet(jaDynamic, i);
+        json joScope = JsonArrayGet(jaSchema, i);
         json jsScopeAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
         if (JsonGetType(jsScopeAnchor) == JSON_TYPE_BOOL && jsScopeAnchor == JSON_TRUE)
             return joScope;
@@ -1919,7 +2086,7 @@ json schema_validate_Type(json jInstance, json jSchema)
         {
             if (nInstanceType == JSON_TYPE_INTEGER || nInstanceType == JSON_TYPE_FLOAT)
             {
-                schema_debug_ExitFunction(__FUNCTION__);
+                schema_debug_ExitFunction(__FUNCTION__, "instance type is number");
                 return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
             }
         }
@@ -1938,7 +2105,7 @@ json schema_validate_Type(json jInstance, json jSchema)
 
                 if (SqlStep(q) ? SqlGetInt(q, 0) : FALSE)
                 {
-                    schema_debug_ExitFunction(__FUNCTION__);
+                    schema_debug_ExitFunction(__FUNCTION__, "instance type is integer");
                     return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
                 }
             }
@@ -1958,7 +2125,7 @@ json schema_validate_Type(json jInstance, json jSchema)
             json jiFind = JsonFind(jaTypes, jSchema);
             if (JsonGetType(jiFind) != JSON_TYPE_NULL && JsonGetInt(jiFind) == nInstanceType)
             {
-                schema_debug_ExitFunction(__FUNCTION__);
+                schema_debug_ExitFunction(__FUNCTION__, "instance type found in type array");
                 return schema_output_SetAnnotation(joOutputUnit, sKeyword, jSchema, sSource);
             }
         }
@@ -2120,7 +2287,7 @@ json schema_validate_Pattern(json jsInstance, json jSchema)
 
     if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "instance type is not string");
         return joOutputUnit;
     }
 
@@ -2135,21 +2302,21 @@ json schema_validate_Pattern(json jsInstance, json jSchema)
 ///     [ ] This whole function
 
 /// @brief Validates the string "format" keyword.
-/// @param jInstance The instance to validate.
+/// @param jsInstance The instance to validate.
 /// @param jSchema The schema value for "format".
 /// @returns An output object containing the validation result.
-json schema_validate_Format(json jInstance, json jSchema)
+json schema_validate_Format(json jsInstance, json jSchema)
 {
     schema_debug_EnterFunction(__FUNCTION__);
     json joOutputUnit = schema_output_GetOutputUnit();
 
-    if (JsonGetType(jInstance) != JSON_TYPE_STRING)
+    if (JsonGetType(jsInstance) != JSON_TYPE_STRING)
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "instance type is not string");
         return joOutputUnit;
     }
 
-    string sInstance = JsonGetString(jInstance);
+    string sInstance = JsonGetString(jsInstance);
     string sFormat = JsonGetString(jSchema);
     int bValid = FALSE;
 
@@ -2535,7 +2702,7 @@ json schema_validate_Items(json jInstance, json jaPrefixItems, json jItems, json
 
     if (JsonGetType(jInstance) != JSON_TYPE_ARRAY)
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "instance type is not array");
         return jaOutput;
     }
 
@@ -2635,7 +2802,7 @@ json schema_validate_Contains(json jaInstance, json jContains, json jiMinContain
 
     if (JsonGetType(jaInstance) != JSON_TYPE_ARRAY)
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "instance type is not an array");
         return jaOutput;
     }
     /// ---
@@ -2654,8 +2821,7 @@ json schema_validate_Contains(json jaInstance, json jContains, json jiMinContain
 
         int bContains, nInstanceLength = JsonGetLength(jaInstance);
         
-        if (jContains == JsonObject() || nMinContains == 0)
-        // if (jContains == JsonObject())
+        if (jContains == JsonObject())
             jContains = JSON_TRUE;
 
         if (nKeywordType == JSON_TYPE_BOOL)
@@ -3242,6 +3408,7 @@ json schema_validate_Unevaluated(json jInstance, json joSchema, json joOutputUni
 
             if (JsonGetLength(jaUnevaluatedKeys) > 0)
             {
+                // schema_debug_Value("Unevaluated Keys for " + sKeyword, JsonDump(jaUnevaluatedKeys));
                 joOutput = schema_output_SetAnnotation(joOutput, sAnnotationKey, jaUnevaluatedKeys, sSource);
                 if (nKeywordType == JSON_TYPE_BOOL)
                 {
@@ -3642,14 +3809,32 @@ json schema_core_Validate(json jInstance, json joSchema)
     {
         schema_scope_PushSchema(sSchema);
         schema_scope_SetBaseSchema(joSchema);
-        nLexicalScopes++;
+        
+        // Only push to dynamic scope if we haven't already pushed via $id logic below
+        // But wait, $id logic happens after this.
+        // If this is root, it should be in dynamic scope.
+        // If it has $id, it will be pushed again? No, we need to avoid double push.
+        // Actually, if it has $id, the $id block will handle it.
+        // If it DOES NOT have $id, but has $schema (root), we must push it.
+        
+        string sRootID = JsonGetString(JsonObjectGet(joSchema, "$id"));
+        if (sRootID == "")
+            sRootID = JsonGetString(JsonObjectGet(joSchema, "id"));
+
+        if (sRootID == "")
+        {
+             schema_scope_PushLexical(joSchema);
+             schema_scope_PushDynamic(joSchema);
+             nLexicalScopes++;
+        }
+
+        // nLexicalScopes++; // Removed this increment as we handle it conditionally or in $id block
+        
         SetLocalJson(GetModule(), "SCHEMA_KEYWORD_MAP", schema_keyword_LoadTypeMap(sSchema));
 
         /// @note Map all IDs in the document for reference resolution.  This allows us to
         ///     resolve internal references that haven't been saved to the database yet.
-        string sRootID = JsonGetString(JsonObjectGet(joSchema, "$id"));
-        if (sRootID == "")
-            sRootID = JsonGetString(JsonObjectGet(joSchema, "id"));
+        // string sRootID = JsonGetString(JsonObjectGet(joSchema, "$id")); // Already got it
         
         json joIDMap = schema_util_MapIDs(joSchema, sRootID, JsonObject());
         SetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP", joIDMap);
@@ -3688,6 +3873,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             ///     This ensures children resolve against the absolute URI.
             json joNewScope = JsonObjectSet(joSchema, "$id", JsonString(sID));
             schema_scope_PushLexical(joNewScope);
+            schema_scope_PushDynamic(joNewScope);
             nLexicalScopes++;
         }
         else
@@ -3695,6 +3881,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             /// @note If no base URI (e.g. root with relative ID?), just push as is.
             ///     But usually root has absolute ID or we treat it as such.
             schema_scope_PushLexical(joSchema);
+            schema_scope_PushDynamic(joSchema);
             nLexicalScopes++;
         }
     }
@@ -3703,7 +3890,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     if (JsonFind(jaSchemaKeys, JsonString("$dynamicAnchor")) != JsonNull() ||
         JsonFind(jaSchemaKeys, JsonString("$recursiveAnchor")) != JsonNull())
     {
-        schema_scope_PushDynamic(joSchema);
+        // schema_scope_PushDynamic(joSchema);
         bDynamicAnchor = TRUE;
     }
 
@@ -3720,7 +3907,97 @@ json schema_core_Validate(json jInstance, json joSchema)
     if (JsonGetType(jRef) != JSON_TYPE_NULL)
     {
         schema_scope_PushSchemaPath("$ref");
-        jResult = schema_core_Validate(jInstance, schema_reference_ResolveRef(joSchema, jRef));
+        
+        // schema_reference_ResolveRef logic inlined with context switching
+        json joBaseSchema = schema_scope_GetBaseSchema();
+        string sRef = JsonGetString(jRef);
+        
+        string sBaseURI = JsonGetString(JsonObjectGet(joBaseSchema, "$id"));
+        if (sBaseURI == "") sBaseURI = JsonGetString(JsonObjectGet(joBaseSchema, "id"));
+        
+        string sFullURI = schema_reference_ResolveURI(sBaseURI, sRef);
+        
+        int nFragmentPos = FindSubString(sFullURI, "#");
+        string sSchemaID = sFullURI;
+        string sFragment = "";
+        
+        if (nFragmentPos != -1)
+        {
+            sSchemaID = GetStringLeft(sFullURI, nFragmentPos);
+            sFragment = GetStringRight(sFullURI, GetStringLength(sFullURI) - nFragmentPos - 1);
+        }
+        
+        json joTargetSchema;
+        int bContextSwitch = FALSE;
+        json joOldIDMap;
+        
+        if (sSchemaID == "" || sSchemaID == sBaseURI)
+        {
+            joTargetSchema = joBaseSchema;
+        }
+        else
+        {
+            // Check if the schema is already in the current ID map (internal reference)
+            json joCurrentIDMap = GetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP");
+            if (JsonGetType(joCurrentIDMap) == JSON_TYPE_OBJECT)
+            {
+                json joMapped = JsonObjectGet(joCurrentIDMap, sSchemaID);
+                if (JsonGetType(joMapped) == JSON_TYPE_OBJECT)
+                {
+                    joTargetSchema = joMapped;
+                    // It's an internal reference, so we switch scope but KEEP the ID map
+                    // because we are still in the same document context.
+                    bContextSwitch = TRUE;
+                    schema_scope_PushLexical(joTargetSchema);
+                    schema_scope_PushDynamic(joTargetSchema);
+                }
+            }
+
+            // If not found internally, try to load it (external reference)
+            if (JsonGetType(joTargetSchema) == JSON_TYPE_NULL)
+            {
+                joTargetSchema = schema_reference_GetSchema(sSchemaID);
+                if (JsonGetType(joTargetSchema) == JSON_TYPE_OBJECT)
+                {
+                    bContextSwitch = TRUE;
+                    schema_scope_PushLexical(joTargetSchema);
+                    schema_scope_PushDynamic(joTargetSchema);
+                    
+                    // It's a new document, so we must map its IDs and replace the map
+                    joOldIDMap = GetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP");
+                    json joIDMap = schema_util_MapIDs(joTargetSchema, sSchemaID, JsonObject());
+                    SetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP", joIDMap);
+                }
+                else
+                {
+                    joTargetSchema = JsonNull();
+                }
+            }
+        }
+        
+        if (JsonGetType(joTargetSchema) != JSON_TYPE_NULL)
+        {
+            json jRefSchema;
+            if (sFragment == "")
+                jRefSchema = joTargetSchema;
+            else
+                jRefSchema = schema_reference_ResolveFragment(joTargetSchema, sFragment);
+                
+            if (JsonGetType(jRefSchema) != JSON_TYPE_NULL)
+            {
+                jResult = schema_core_Validate(jInstance, jRefSchema);
+            }
+        }
+        
+        if (bContextSwitch)
+        {
+            schema_scope_PopLexical();
+            schema_scope_PopDynamic();
+            // Only restore the ID map if we actually replaced it (i.e. it was not null)
+            if (JsonGetType(joOldIDMap) != JSON_TYPE_NULL)
+                SetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP", joOldIDMap);
+        }
+        
         schema_scope_PopSchemaPath();
     }
     else
@@ -3777,6 +4054,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             while (nLexicalScopes > 0)
             {
                 schema_scope_PopLexical();
+                schema_scope_PopDynamic();
                 nLexicalScopes--;
             }
 
@@ -4056,12 +4334,13 @@ json schema_core_Validate(json jInstance, json joSchema)
     ///     [ ] check keyword map
     joOutputUnit = schema_validate_Unevaluated(jInstance, joSchema, joOutputUnit);
 
-    if (bDynamicAnchor)
-        schema_scope_PopDynamic();
+    // if (bDynamicAnchor)
+    //    schema_scope_PopDynamic();
 
     while (nLexicalScopes > 0)
     {
         schema_scope_PopLexical();
+        schema_scope_PopDynamic();
         nLexicalScopes--;
     }
 
