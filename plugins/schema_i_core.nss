@@ -155,7 +155,7 @@ void schema_core_CreateTables()
 {
     schema_core_BeginTransaction(); 
 
-    /// `schema_schema` holds all validated schema, including meta schema provided by json-schema.org
+    /// @note `schema_schema` holds all validated schema, including meta schema provided by json-schema.org
     ///     All user-provided schema will also be saved to this table for retrieval or later use.
     ///     If the UNIQUE key is violated, the record will be removed and replaced (not updated) by
     ///     the incoming schema, allowing associated records in `schema_keyword` to be deleted without
@@ -183,7 +183,7 @@ void schema_core_CreateTables()
     ;";
     schema_core_ExecuteQuery(s);
 
-    /// `schema_keyword` holds all keywords directly assocaited with a specified schema.
+    /// @note `schema_keyword` holds all keywords directly assocaited with a specified schema.
     ///     Keywords associated by reference (or allOf) are not included here and will
     ///     be resolved when keyword map is loaded at validation runtime.
     s = r"
