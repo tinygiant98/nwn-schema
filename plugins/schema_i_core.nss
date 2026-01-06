@@ -41,6 +41,7 @@ json jaContextKeys = JsonParse(r"[
 ///         [ ] schema_reference_ -> schema_core_ ? since it's used in a lot of places?
 json schema_core_Validate(json jInstance, json joSchema);
 json schema_reference_GetSchema(string sSchemaID);
+json schema_keyword_GetFullMap(string sSchemaID, json joSchema = JSON_NULL, int bForce = FALSE);
 
 // Forward declarations for utility functions used in reference resolution
 json schema_util_JsonObjectGet(json jObject, string sKey);
@@ -183,12 +184,12 @@ void schema_core_CreateTables()
     /// @note `schema_schema` holds all validated schema, including meta schema provided by json-schema.org
     ///     All user-provided schema will also be saved to this table for retrieval or later use.
     ///     If the UNIQUE key is violated, the record will be removed and replaced (not updated) by
-    ///     the incoming schema, allowing associated records in `schema_keyword` to be deleted without
-    ///     using a foreign key.
+    ///     the incoming schema.
     string s = r"
         CREATE TABLE IF NOT EXISTS schema_schema (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             schema TEXT NOT NULL,
+            keymap TEXT,
             schema_id TEXT GENERATED ALWAYS AS (
                 COALESCE(
                     json_extract(schema, '$.$id'),
@@ -208,44 +209,6 @@ void schema_core_CreateTables()
     ;";
     schema_core_ExecuteQuery(s);
 
-    /// @note `schema_keyword` holds all keywords directly assocaited with a specified schema.
-    ///     Keywords associated by reference (or allOf) are not included here and will
-    ///     be resolved when keyword map is loaded at validation runtime.
-    s = r"
-        CREATE TABLE IF NOT EXISTS schema_keyword (
-            schema_id INTEGER,
-            keyword TEXT,
-            PRIMARY KEY (schema_id, keyword)
-        ) WITHOUT ROWID;
-    ";
-    schema_core_ExecuteQuery(s);
-
-    /// @note This trigger is the basis for the keyword mapping and validation system.
-    ///     When a new schema is inserted, all keywords from its properties object
-    ///     are inserted into the `schema_keyword` table for later use during validation.
-    s = r"
-        CREATE TRIGGER IF NOT EXISTS schema_insert_keywords AFTER INSERT ON schema_schema
-        BEGIN
-            INSERT INTO schema_keyword (schema_id, keyword)
-            SELECT new.id, key
-            FROM json_each(json_extract(new.schema, '$.properties'));
-        END;
-    ";
-    schema_core_ExecuteQuery(s);
-
-    /// @note Foreign Key relationships don't always work as expected because of the way
-    ///     NWN handles sqlite connections to external databases.  To get around this limitation,
-    ///     use a BEFORE INSERT trigger to remove all associated records in other tables
-    ///     and remove all use of FOREIGN KEY.
-    s = r"
-        CREATE TRIGGER IF NOT EXISTS schema_delete_keywords BEFORE INSERT ON schema_schema
-        FOR EACH ROW
-        BEGIN
-            DELETE FROM schema_keyword 
-            WHERE schema_id = (SELECT id FROM schema_schema WHERE schema_id = NEW.schema_id);
-        END;
-    ";
-    schema_core_ExecuteQuery(s);
     schema_core_CommitTransaction();
 }
 
@@ -1641,12 +1604,16 @@ void schema_reference_SaveSchema(json joSchema)
     if (sID == "")
         return;
 
+    // Compute the keyword map
+    json jaKeyMap = schema_keyword_GetFullMap(sID, joSchema, TRUE);
+
     string s = r"
-        INSERT INTO schema_schema (schema)
-        VALUES (:schema);
+        INSERT INTO schema_schema (schema, keymap)
+        VALUES (:schema, :keymap);
     ";
     sqlquery q = schema_core_PrepareCampaignQuery(s);
     SqlBindJson(q, ":schema", joSchema);
+    SqlBindJson(q, ":keymap", jaKeyMap);
     SqlStep(q);
 }
 
@@ -1971,35 +1938,6 @@ json schema_reference_ResolveDynamicRef(json joSchema, json jsRef, int bRevertTo
 json schema_reference_ResolveRecursiveRef(json joSchema)
 {
     json jaDynamic = schema_scope_GetDynamic();
-    // if (JsonGetType(jaDynamic) != JSON_TYPE_ARRAY || JsonGetLength(jaDynamic) == 0)
-    //    return JsonNull();
-
-    /*
-    json jaSchema = JsonArrayGet(jaDynamic, schema_scope_GetDepth());
-    if (JsonGetType(jaSchema) != JSON_TYPE_ARRAY || JsonGetLength(jaSchema) == 0)
-        return JsonNull();
-
-    int i; for (i = 0; i < JsonGetLength(jaSchema); i++)
-    {
-        json joScope = JsonArrayGet(jaSchema, i);
-        json jsAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
-        if (JsonGetType(jsAnchor) == JSON_TYPE_BOOL && jsAnchor == JSON_TRUE)
-            return joScope;
-    }
-    */
-
-    // jaDynamic is the stack of scopes for the current depth.
-    // We iterate through the stack to find the recursive anchor.
-    /*
-    int i; for (i = 0; i < JsonGetLength(jaDynamic); i++)
-    {
-        json joScope = JsonArrayGet(jaDynamic, i);
-        json jsAnchor = JsonObjectGet(joScope, "$recursiveAnchor");
-        if (JsonGetType(jsAnchor) == JSON_TYPE_BOOL && jsAnchor == JSON_TRUE)
-            return joScope;
-    }
-    */
-
     json jRef = JsonObjectGet(joSchema, "$recursiveRef");
     json joTarget = schema_reference_ResolveRef(joSchema, jRef);
 
@@ -2028,29 +1966,120 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
     return joTarget;
 }
 
-/// @private Load the keyword type map for the specified schema ID from the database.
-json schema_keyword_LoadTypeMap(string sSchemaID)
+/// @private Recursive helper to collect keywords.
+json _schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json jaKeywords)
 {
-    string s = r"
-        SELECT k.keyword
-        FROM schema_keyword k
-        JOIN schema_schema s ON k.schema_id = s.id
-        WHERE s.schema_id = :id;
-    ";
-    sqlquery q = schema_core_PrepareCampaignQuery(s);
-    SqlBindString(q, ":id", sSchemaID);
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sBaseURI", JsonString(sBaseURI));
+    schema_debug_Argument(__FUNCTION__, "jaSeen", jaSeen);
+    schema_debug_Argument(__FUNCTION__, "jaKeywords", jaKeywords);
 
-    json joMap = JsonObject();
-    while (SqlStep(q))
+    // 1. Properties
+    // Use SQLite to extract keys efficiently and add them to our array
+    string s = r"
+        SELECT json_group_array(DISTINCT value)
+        FROM (
+            SELECT value FROM json_each(:keywords)
+            UNION
+            SELECT key as value
+            FROM json_each(COALESCE(json_extract(:schema, '$.properties'), '{}'))
+        );
+    ";
+    sqlquery q = schema_core_PrepareModuleQuery(s);
+    SqlBindJson(q, ":schema", joSchema);
+    SqlBindJson(q, ":keywords", jaKeywords);
+    
+    if (SqlStep(q))
     {
-        string sKeyword = SqlGetString(q, 0);
-        joMap = JsonObjectSet(joMap, sKeyword, JsonBool(TRUE));
+        jaKeywords = SqlGetJson(q, 0);
     }
 
-    if (JsonGetLength(joMap) == 0)
-        return JsonNull();
+    // 2. allOf
+    json jaAllOf = JsonObjectGet(joSchema, "allOf");
+    if (JsonGetType(jaAllOf) == JSON_TYPE_ARRAY)
+    {
+        int i; int n = JsonGetLength(jaAllOf);
+        for (i = 0; i < n; i++)
+        {
+            json joItem = JsonArrayGet(jaAllOf, i);
+            json jRef = JsonObjectGet(joItem, "$ref");
 
-    return joMap;
+            if (JsonGetType(jRef) == JSON_TYPE_STRING)
+            {
+                string sRef = JsonGetString(jRef);
+                string sResolvedURI = schema_reference_ResolveURI(sBaseURI, sRef);
+                
+                if (JsonFind(jaSeen, JsonString(sResolvedURI)) == JsonNull())
+                {
+                    JsonArrayInsertInplace(jaSeen, JsonString(sResolvedURI));
+                    
+                    json joTarget = schema_reference_GetSchema(sResolvedURI);
+                    if (JsonGetType(joTarget) == JSON_TYPE_OBJECT)
+                    {
+                        string sTargetID = JsonGetString(JsonObjectGet(joTarget, "$id"));
+                        if (sTargetID == "") sTargetID = JsonGetString(JsonObjectGet(joTarget, "id"));
+                        if (sTargetID == "") sTargetID = sResolvedURI;
+                        
+                        jaKeywords = _schema_keyword_Collect(joTarget, sTargetID, jaSeen, jaKeywords);
+                    }
+                }
+            }
+            else
+                jaKeywords = _schema_keyword_Collect(joItem, sBaseURI, jaSeen, jaKeywords);
+        }
+    }
+
+    schema_debug_ExitFunction(__FUNCTION__);
+    return jaKeywords;
+}
+
+/// @brief Determine its full keyword map... including keys from its own properties key
+///     as well as those from all resolved references (or any other allowabled schema) within allOF.
+json schema_keyword_GetFullMap(string sSchemaID, json joSchema = JSON_NULL, int bForce = FALSE)
+{
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sSchemaID", JsonString(sSchemaID));
+    schema_debug_Argument(__FUNCTION__, "joSchema", joSchema);
+    schema_debug_Argument(__FUNCTION__, "bForce", JsonBool(bForce));
+
+    // Try to retrieve from the database first if an ID is provided and not forced
+    if (!bForce && sSchemaID != "")
+    {
+        string s = r"
+            SELECT keymap
+            FROM schema_schema
+            WHERE schema_id = :id;
+        ";
+        sqlquery q = schema_core_PrepareCampaignQuery(s);
+        SqlBindString(q, ":id", sSchemaID);
+        
+        if (SqlStep(q))
+        {
+            json joMap = SqlGetJson(q, 0);
+            if (JsonGetType(joMap) == JSON_TYPE_ARRAY)
+            {
+                schema_debug_ExitFunction(__FUNCTION__, "keymap found in database");
+                return joMap;
+            }
+        }
+    }
+
+    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT)
+        joSchema = schema_reference_GetSchema(sSchemaID);
+
+    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT)
+    {  
+        schema_debug_ExitFunction(__FUNCTION__, "non-object schema found in database");
+        return JsonArray();
+    }
+
+    json jaSeen = JsonArray();
+    if (sSchemaID != "") JsonArrayInsertInplace(jaSeen, JsonString(sSchemaID));
+    
+    // Use an array to accumulate keywords
+    json j = _schema_keyword_Collect(joSchema, sSchemaID, jaSeen, JsonArray());
+    schema_debug_ExitFunction(__FUNCTION__);
+    return j;
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -3852,7 +3881,7 @@ json schema_core_Validate(json jInstance, json joSchema)
 
         // nLexicalScopes++; // Removed this increment as we handle it conditionally or in $id block
         
-        SetLocalJson(GetModule(), "SCHEMA_KEYWORD_MAP", schema_keyword_LoadTypeMap(sSchema));
+        //SetLocalJson(GetModule(), "SCHEMA_KEYWORD_MAP", schema_keyword_LoadTypeMap(sSchema));
 
         /// @note Map all IDs in the document for reference resolution.  This allows us to
         ///     resolve internal references that haven't been saved to the database yet.
@@ -4374,25 +4403,6 @@ json schema_core_Validate(json jInstance, json joSchema)
 /// -----------------------------------------------------------------------------------------------
 ///                                     PUBLIC API
 /// -----------------------------------------------------------------------------------------------
-
-/// @private Checks if a schema is trusted based on its ID.
-/// @param joSchema The schema to check.
-/// @returns TRUE if the schema is trusted, FALSE otherwise.
-int schema_core_IsSchemaTrusted(json joSchema)
-{
-    string sID = JsonGetString(JsonObjectGet(joSchema, "$id"));
-    if (sID == "")
-        sID = JsonGetString(JsonObjectGet(joSchema, "id"));
-
-    if (sID == "")
-        return FALSE;
-
-    if (FindSubString(sID, "http://json-schema.org") != -1 || 
-        FindSubString(sID, "https://json-schema.org") != -1)
-        return TRUE;
-
-    return FALSE;
-}
 
 int ValidateSchema(json joSchema, int nDraft = 0);
 int ValidateInstance(json jInstance, string sID = "");

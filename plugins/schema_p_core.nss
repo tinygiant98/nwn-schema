@@ -13,6 +13,11 @@
 
 #include "nw_inc_nui"
 
+void test_changeJsonValue(json j1)
+{
+    j1 = JsonParse(r"[""changed value!""]");
+}
+
 void schema_OnPlayerChat()
 {
     object oPC = GetPCChatSpeaker();
@@ -103,6 +108,21 @@ void schema_OnPlayerChat()
         SetLocalInt(GetModule(), "TEST_ASCII", TRUE);
         ExecuteScript("schema_t_core");
         DeleteLocalInt(GetModule(), "TEST_ASCII");
+    }
+    else if (TEST == 6)
+    {
+        json j = JsonParse(r"[""original value!""]");
+        Notice("Before changeJsonValue: " + JsonDump(j));
+        test_changeJsonValue(j);
+        Notice("After changeJsonValue: " + JsonDump(j));
+
+
+    }
+    else if (TEST = 7)
+    {
+       json jMape = schema_keyword_GetFullMap("https://json-schema.org/draft/2020-12/schema");
+        Notice("Full Keyword Map:");
+        Notice(JsonDump(jMape, 4));
     }
 }
 
