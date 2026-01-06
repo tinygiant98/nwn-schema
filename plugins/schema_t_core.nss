@@ -1570,13 +1570,16 @@ void main()
             json joSchema = JsonArrayGet(jaTrustedSchema, i);
             json jID = JsonObjectGet(joSchema, "$id");
             Debug("Adding schema for " + JsonGetString(jID));
-            string s = r"
-                INSERT INTO schema_schema (schema)
-                VALUES (:schema);
-            ";
-            sqlquery q = schema_core_PrepareQuery(s);
-            SqlBindJson(q, ":schema", joSchema);
-            SqlStep(q);
+            
+            schema_reference_SaveSchema(joSchema);
+            
+            //string s = r"
+            //    INSERT INTO schema_schema (schema)
+            //    VALUES (:schema);
+            //";
+            //sqlquery q = schema_core_PrepareQuery(s);
+            //SqlBindJson(q, ":schema", joSchema);
+            //SqlStep(q);
         }
         schema_core_CommitTransaction();
     }

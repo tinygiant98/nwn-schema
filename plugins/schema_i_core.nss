@@ -1967,12 +1967,17 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
 }
 
 /// @private Recursive helper to collect keywords.
-json _schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json jaKeywords)
+json _schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json jaKeywords, json joVocabulary)
 {
     schema_debug_EnterFunction(__FUNCTION__);
     schema_debug_Argument(__FUNCTION__, "sBaseURI", JsonString(sBaseURI));
     schema_debug_Argument(__FUNCTION__, "jaSeen", jaSeen);
     schema_debug_Argument(__FUNCTION__, "jaKeywords", jaKeywords);
+
+    // Allow the current object to define/override the vocabulary
+    json joLocalVocabulary = JsonObjectGet(joSchema, "$vocabulary");
+    if (JsonGetType(joLocalVocabulary) == JSON_TYPE_OBJECT)
+        joVocabulary = joLocalVocabulary;
 
     // 1. Properties
     // Use SQLite to extract keys efficiently and add them to our array
@@ -2020,12 +2025,20 @@ json _schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json j
                         if (sTargetID == "") sTargetID = JsonGetString(JsonObjectGet(joTarget, "id"));
                         if (sTargetID == "") sTargetID = sResolvedURI;
                         
-                        jaKeywords = _schema_keyword_Collect(joTarget, sTargetID, jaSeen, jaKeywords);
+                        // Check definitive ID against vocabulary
+                        if (sTargetID != sResolvedURI && JsonGetType(joVocabulary) == JSON_TYPE_OBJECT)
+                        {
+                            json jVocab = JsonObjectGet(joVocabulary, sTargetID);
+                            if (JsonGetType(jVocab) == JSON_TYPE_BOOL && jVocab == JSON_FALSE)
+                                continue;
+                        }
+                        
+                        jaKeywords = _schema_keyword_Collect(joTarget, sTargetID, jaSeen, jaKeywords, joVocabulary);
                     }
                 }
             }
             else
-                jaKeywords = _schema_keyword_Collect(joItem, sBaseURI, jaSeen, jaKeywords);
+                jaKeywords = _schema_keyword_Collect(joItem, sBaseURI, jaSeen, jaKeywords, joVocabulary);
         }
     }
 
@@ -2077,7 +2090,9 @@ json schema_keyword_GetFullMap(string sSchemaID, json joSchema = JSON_NULL, int 
     if (sSchemaID != "") JsonArrayInsertInplace(jaSeen, JsonString(sSchemaID));
     
     // Use an array to accumulate keywords
-    json j = _schema_keyword_Collect(joSchema, sSchemaID, jaSeen, JsonArray());
+    json joVocabulary = JsonObjectGet(joSchema, "$vocabulary");
+    json j = _schema_keyword_Collect(joSchema, sSchemaID, jaSeen, JsonArray(), joVocabulary);
+
     schema_debug_ExitFunction(__FUNCTION__);
     return j;
 }
@@ -3855,11 +3870,16 @@ json schema_core_Validate(json jInstance, json joSchema)
     /// @brief Keep track of the current schema.  $schema should only be present in the root note
     ///     of any schema, so if it's present, assume that we're starting a new validation.
     int nLexicalScopes = 0;
+    int nMapScopes = 0;
     string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
     if (sSchema != "")
     {
         schema_scope_PushSchema(sSchema);
         schema_scope_SetBaseSchema(joSchema);
+
+        json jaKeyMap = schema_keyword_GetFullMap(sSchema);
+        schema_scope_PushKeymap(jaKeyMap);
+        nMapScopes++;
         
         // Only push to dynamic scope if we haven't already pushed via $id logic below
         // But wait, $id logic happens after this.
@@ -3879,16 +3899,18 @@ json schema_core_Validate(json jInstance, json joSchema)
              nLexicalScopes++;
         }
 
-        // nLexicalScopes++; // Removed this increment as we handle it conditionally or in $id block
-        
-        //SetLocalJson(GetModule(), "SCHEMA_KEYWORD_MAP", schema_keyword_LoadTypeMap(sSchema));
-
-        /// @note Map all IDs in the document for reference resolution.  This allows us to
-        ///     resolve internal references that haven't been saved to the database yet.
-        // string sRootID = JsonGetString(JsonObjectGet(joSchema, "$id")); // Already got it
-        
         json joIDMap = schema_util_MapIDs(joSchema, sRootID, JsonObject());
         SetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP", joIDMap);
+    }
+    else
+    {
+        json jaKeyMap = schema_scope_GetKeymap();
+        if (JsonGetType(jaKeyMap) != JSON_TYPE_ARRAY || JsonGetLength(jaKeyMap) == 0)
+        {
+            jaKeyMap = schema_keyword_GetFullMap(SCHEMA_DEFAULT_DRAFT);
+            schema_scope_PushKeymap(jaKeyMap);
+            nMapScopes++;
+        }
     }
 
     /// @todo
@@ -4109,6 +4131,12 @@ json schema_core_Validate(json jInstance, json joSchema)
                 nLexicalScopes--;
             }
 
+            while (nMapScopes > 0)
+            {
+                schema_scope_PopKeymap();
+                nMapScopes--;
+            }
+
             schema_debug_ExitFunction(__FUNCTION__);
             return joOutputUnit;
         }
@@ -4124,6 +4152,11 @@ json schema_core_Validate(json jInstance, json joSchema)
     {
         jResult = JsonNull();
         string sKey = JsonGetString(JsonArrayGet(jaSchemaKeys, i));
+        json jaMapStack = schema_scope_GetKeymap();
+        json jaKeyMap = JsonArrayGet(jaMapStack, JsonGetLength(jaMapStack) - 1);
+
+        if (JsonFind(jaKeyMap, JsonString(sKey)) == JsonNull())
+            continue;
 
         if (sKey == "$ref" || sKey == "$dynamicRef" || sKey == "$recursiveRef" || 
             sKey == "$schema" || sKey == "$id" || sKey == "id" || 
@@ -4394,6 +4427,12 @@ json schema_core_Validate(json jInstance, json joSchema)
         schema_scope_PopLexical();
         schema_scope_PopDynamic();
         nLexicalScopes--;
+    }
+
+    while (nMapScopes > 0)
+    {
+        schema_scope_PopKeymap();
+        nMapScopes--;
     }
 
     schema_debug_ExitFunction(__FUNCTION__);
