@@ -41,6 +41,7 @@ json jaContextKeys = JsonParse(r"[
 ///         [ ] schema_reference_ -> schema_core_ ? since it's used in a lot of places?
 json schema_core_Validate(json jInstance, json joSchema);
 json schema_reference_GetSchema(string sSchemaID);
+void schema_reference_RebuildKeymaps();
 json schema_keyword_GetFullMap(string sSchemaID, json joSchema = JSON_NULL, int bForce = FALSE);
 
 // Forward declarations for utility functions used in reference resolution
@@ -48,88 +49,11 @@ json schema_util_JsonObjectGet(json jObject, string sKey);
 int schema_util_HasKey(json jObject, string sKey);
 int schema_util_RegExpMatch(string sPattern, string sString);
 
-sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE);
 string schema_reference_MergePath(json jaMatchBase, string sPathRef);
 
 string schema_reference_NormalizePath(string sPath);
 
-/// @private Escape a string for use in a JSON pointer (~ -> ~0, / -> ~1)
-string schema_reference_EscapePointer(string sToken)
-{
-    schema_debug_EnterFunction(__FUNCTION__);
-    schema_debug_Argument(__FUNCTION__, "sToken", JsonString(sToken));
 
-    if (sToken == "")
-    {
-        schema_debug_ExitFunction(__FUNCTION__, "sToken is an empty string");
-        return "";
-    }
-    
-    string s = "SELECT replace(replace(:token, '~', '~0'), '/', '~1')";
-    sqlquery q = schema_core_PrepareQuery(s, TRUE);
-    SqlBindString(q, ":token", sToken);
-    
-    schema_debug_ExitFunction(__FUNCTION__);
-    return SqlStep(q) ? SqlGetString(q, 0) : sToken;
-}
-
-/// @private Unescape a JSON pointer string (~1 -> /, ~0 -> ~)
-string schema_reference_UnescapePointer(string sPointer)
-{
-    if (sPointer == "") return "";
-
-    string s = "SELECT replace(replace(:pointer, '~1', '/'), '~0', '~')";
-    sqlquery q = schema_core_PrepareQuery(s, TRUE);
-    SqlBindString(q, ":pointer", sPointer);
-    
-    return SqlStep(q) ? SqlGetString(q, 0) : sPointer;
-}
-
-/// @private Decode a URI string (e.g. %25 -> %, %2F -> /)
-/// @note This implementation uses SQLite to handle proper UTF-8 byte decoding.
-string schema_reference_DecodeURI(string sURI)
-{
-    if (FindSubString(sURI, "%") == -1)
-        return sURI;
-
-    // 1. Get the hex representation of the URI string
-    string s = "SELECT hex(:uri)";
-    sqlquery q = schema_core_PrepareQuery(s, TRUE);
-    SqlBindString(q, ":uri", sURI);
-    
-    if (!SqlStep(q)) return sURI;
-    string sHex = SqlGetString(q, 0);
-    string sResultHex = "";
-    int i, nLen = GetStringLength(sHex);
-
-    // 2. Parse the hex string
-    for (i = 0; i < nLen; i += 2)
-    {
-        string sByte = GetSubString(sHex, i, 2);
-        if (sByte == "25" && i + 6 <= nLen) // Found '%' (25) and have at least 2 more chars (4 hex digits)
-        {
-            string sH1 = GetSubString(sHex, i + 2, 2); // e.g. 43 ('C')
-            string sH2 = GetSubString(sHex, i + 4, 2); // e.g. 33 ('3')
-            
-            // Convert hex codes back to characters using JSON parsing
-            string sC1 = JsonGetString(JsonParse("\"\\u00" + sH1 + "\""));
-            string sC2 = JsonGetString(JsonParse("\"\\u00" + sH2 + "\""));
-            
-            sResultHex += sC1 + sC2;
-            i += 4; // Skip the 2 encoded bytes (4 hex chars)
-        }
-        else
-        {
-            sResultHex += sByte;
-        }
-    }
-    
-    // 3. Cast the final hex string back to text
-    s = "SELECT CAST(x'" + sResultHex + "' AS TEXT)";
-    q = schema_core_PrepareQuery(s, TRUE);
-    
-    return SqlStep(q) ? SqlGetString(q, 0) : sURI;
-}
 
 /// @private Prepare a query for any schema-related database or for module use.
 /// @param s The query string to prepare.
@@ -162,7 +86,7 @@ void schema_core_ExecuteModuleQuery(string s)
     schema_core_ExecuteQuery(s, TRUE);
 }
 
-void schema_core_ExeucteCampaignQuery(string s)
+void schema_core_ExecuteCampaignQuery(string s)
 {
     schema_core_ExecuteQuery(s, FALSE);
 }
@@ -424,6 +348,26 @@ json schema_scope_DeconstructPointer(string sPointer)
 
     schema_debug_ExitFunction(__FUNCTION__);
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
+}
+
+/// @private Escape a string for use in a JSON pointer (~ -> ~0, / -> ~1)
+string schema_reference_EscapePointer(string sToken)
+{
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sToken", JsonString(sToken));
+
+    if (sToken == "")
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "sToken is an empty string");
+        return "";
+    }
+    
+    string s = "SELECT replace(replace(:token, '~', '~0'), '/', '~1')";
+    sqlquery q = schema_core_PrepareModuleQuery(s);
+    SqlBindString(q, ":token", sToken);
+    
+    schema_debug_ExitFunction(__FUNCTION__);
+    return SqlStep(q) ? SqlGetString(q, 0) : sToken;
 }
 
 /// @private Construct a pointer string from a json array of pointer segments.
@@ -1405,6 +1349,64 @@ json schema_output_Detailed(json joOutputUnit)
 
 
 
+/// @private Unescape a JSON pointer string (~1 -> /, ~0 -> ~)
+string schema_reference_UnescapePointer(string sPointer)
+{
+    if (sPointer == "") return "";
+
+    string s = "SELECT replace(replace(:pointer, '~1', '/'), '~0', '~')";
+    sqlquery q = schema_core_PrepareModuleQuery(s);
+    SqlBindString(q, ":pointer", sPointer);
+    
+    return SqlStep(q) ? SqlGetString(q, 0) : sPointer;
+}
+
+/// @private Decode a URI string (e.g. %25 -> %, %2F -> /)
+/// @note This implementation uses SQLite to handle proper UTF-8 byte decoding.
+string schema_reference_DecodeURI(string sURI)
+{
+    if (FindSubString(sURI, "%") == -1)
+        return sURI;
+
+    // 1. Get the hex representation of the URI string
+    string s = "SELECT hex(:uri)";
+    sqlquery q = schema_core_PrepareModuleQuery(s);
+    SqlBindString(q, ":uri", sURI);
+    
+    if (!SqlStep(q)) return sURI;
+    string sHex = SqlGetString(q, 0);
+    string sResultHex = "";
+    int i, nLen = GetStringLength(sHex);
+
+    // 2. Parse the hex string
+    for (i = 0; i < nLen; i += 2)
+    {
+        string sByte = GetSubString(sHex, i, 2);
+        if (sByte == "25" && i + 6 <= nLen) // Found '%' (25) and have at least 2 more chars (4 hex digits)
+        {
+            string sH1 = GetSubString(sHex, i + 2, 2); // e.g. 43 ('C')
+            string sH2 = GetSubString(sHex, i + 4, 2); // e.g. 33 ('3')
+            
+            // Convert hex codes back to characters using JSON parsing
+            string sC1 = JsonGetString(JsonParse("\"\\u00" + sH1 + "\""));
+            string sC2 = JsonGetString(JsonParse("\"\\u00" + sH2 + "\""));
+            
+            sResultHex += sC1 + sC2;
+            i += 4; // Skip the 2 encoded bytes (4 hex chars)
+        }
+        else
+        {
+            sResultHex += sByte;
+        }
+    }
+    
+    // 3. Cast the final hex string back to text
+    s = "SELECT CAST(x'" + sResultHex + "' AS TEXT)";
+    q = schema_core_PrepareModuleQuery(s);
+    
+    return SqlStep(q) ? SqlGetString(q, 0) : sURI;
+}
+
 /// @private Normalize a path that contains empty segments, or hierarchical segments such as
 ///     "." and "..".
 /// @param sPath The path to normalize.
@@ -1617,9 +1619,40 @@ void schema_reference_SaveSchema(json joSchema)
     SqlStep(q);
 }
 
+/// @brief Iterates through all schemas in the database and forces a regeneration of their keymaps.
+/// @note This is useful for development and testing when the keymap logic has changed.
+void schema_reference_RebuildKeymaps()
+{
+    schema_core_CreateTables();
+
+    string s = "SELECT json_group_array(schema_id) FROM schema_schema";
+    sqlquery q = schema_core_PrepareCampaignQuery(s);
+    
+    if (!SqlStep(q))
+        return;
+
+    json jaIDs = SqlGetJson(q, 0);
+
+    int i;
+    for (i = 0; i < JsonGetLength(jaIDs); i++) 
+    {
+        string sID = JsonGetString(JsonArrayGet(jaIDs, i));
+
+        // Force regeneration of keymap
+        // We pass JSON_NULL for the schema, which forces schema_keyword_GetFullMap to retrieve it from the DB
+        json jaKeyMap = schema_keyword_GetFullMap(sID, JSON_NULL, TRUE);
+
+        // Update database
+        s = "UPDATE schema_schema SET keymap = :keymap WHERE schema_id = :id";
+        q = schema_core_PrepareCampaignQuery(s);
+        SqlBindJson(q, ":keymap", jaKeyMap);
+        SqlBindString(q, ":id", sID);
+        SqlStep(q);
+    }
+}
+
 /// @todo
 ///     [ ] Track where these JsonNull() get returns and figure out what to do with them.
-///     [ ] Add an annotation here if $schema = "" or could not be found in db.
 ///     [ ] Need better error handling/messaging here.  Structured logging?
 ///     [ ] Ensure $dynamicReference acts like $ref if the $dynamicAnchor can't be located.
 
@@ -1699,13 +1732,6 @@ json schema_reference_GetSchema(string sSchemaID)
     return JsonNull();
 }
 
-/// @todo
-///     [ ] Is this where we need ~0 and ~1 resolution?
-///     [ ] Support id's in refs? so that if a ref schema is found, and it has an id
-///         it should be validated as a a new depth so all the new data can be used for it?
-///         how does that interplay with our context?
-///     [ ] need to support ~0 and ~1 somewheres!
-
 /// @private Resolve a fragment reference within a $ref.
 /// @param joSchema The base schema to resolve the fragment against.
 /// @param sFragment The fragment string to resolve.
@@ -1752,58 +1778,6 @@ string schema_reference_MergePath(json jaMatchBase, string sPathRef)
             return sPathRef;
     }
 }
-
-/// @todo
-///     [ ] No longer used in the new version of URI resolution.  Remove?
-/*
-/// @private Determine is members of jaMatch meet desired existence
-///     criteria defined in jaCriteria.
-/// @param jaMatch Uri-reference match results.
-/// @param jaCriteria Existence criteria array.
-/// @returns TRUE for a successful match, FALSE otherwise.
-/// @note jaCriteria must be an 10-element array containing the integers
-///     -1, 0 or 1.  No other values are valid.  This function will compare
-///     each member in jaMatch to it's matching-index member in jaCriteria.
-///         -1: Value of matching index is ignored
-///          0: Value of matching index must be a zero-length string
-///          1: Value of matching index must be a greater-than-zero-length string
-int schema_reference_CheckMatch(json jaMatch, json jaCriteria)
-{
-    string s = r"
-        WITH
-            numbers(n) AS (
-                SELECT 0
-                UNION ALL
-                SELECT n + 1 FROM numbers WHERE n + 1 < json_array_length(:criteria)
-            ),
-            pairs AS (
-                SELECT n,
-                    json_extract(:match, '$[' || n || ']') AS t,
-                    json_extract(:criteria, '$[' || n || ']') AS c
-                FROM numbers
-                WHERE json_extract(:criteria, '$[' || n || ']') != -1
-            )
-        SELECT
-            CASE
-                WHEN SUM(
-                    CASE
-                        WHEN c = 1 AND (t IS NULL OR t = '') THEN 1
-                        WHEN c = 0 AND (t IS NOT NULL AND t != '') THEN 1
-                        ELSE 0
-                    END
-                ) = 0
-                THEN 1
-                ELSE 0
-            END
-        FROM pairs;
-    ";
-    sqlquery q = schema_core_PrepareCampaignQuery(s);
-    SqlBindJson(q, ":match", jaMatch);
-    SqlBindJson(q, ":criteria", jaCriteria);
-
-    return SqlStep(q) ? SqlGetInt(q, 0) : FALSE;
-}
-*/
 
 /// @private Resolve a $ref.  This function follows closesly the uri resolution
 ///     algorithm defined in RFC 3986, Section 5.2.  It handles both absolute and

@@ -1563,25 +1563,18 @@ void main()
         Debug("bLoad = TRUE");
 
         schema_core_CreateTables();
-        schema_core_BeginTransaction();
+
         json jaTrustedSchema = schema_core_GetTrustedSchema(TRUE);
         int i; for (i = 0; i < JsonGetLength(jaTrustedSchema); i++)
         {
             json joSchema = JsonArrayGet(jaTrustedSchema, i);
             json jID = JsonObjectGet(joSchema, "$id");
             Debug("Adding schema for " + JsonGetString(jID));
-            
             schema_reference_SaveSchema(joSchema);
-            
-            //string s = r"
-            //    INSERT INTO schema_schema (schema)
-            //    VALUES (:schema);
-            //";
-            //sqlquery q = schema_core_PrepareQuery(s);
-            //SqlBindJson(q, ":schema", joSchema);
-            //SqlStep(q);
         }
-        schema_core_CommitTransaction();
+
+        schema_reference_RebuildKeymaps();
+
     }
     else if (GetLocalInt(GetModule(), "TEST_ASCII"))
     {
