@@ -58,12 +58,20 @@ string schema_reference_NormalizePath(string sPath);
 /// @private Escape a string for use in a JSON pointer (~ -> ~0, / -> ~1)
 string schema_reference_EscapePointer(string sToken)
 {
-    if (sToken == "") return "";
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sToken", JsonString(sToken));
+
+    if (sToken == "")
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "sToken is an empty string");
+        return "";
+    }
     
     string s = "SELECT replace(replace(:token, '~', '~0'), '/', '~1')";
     sqlquery q = schema_core_PrepareQuery(s);
     SqlBindString(q, ":token", sToken);
     
+    schema_debug_ExitFunction(__FUNCTION__);
     return SqlStep(q) ? SqlGetString(q, 0) : sToken;
 }
 
@@ -276,7 +284,7 @@ void schema_scope_ResizeArrays()
         json joScope = GetLocalJson(GetModule(), sScope);
         if (JsonGetType(joScope) != JSON_TYPE_ARRAY)
             joScope = JsonArray();        
-        
+
         int nLength = JsonGetLength(joScope);
         if (nLength == nRequiredLength)
             continue;
@@ -764,7 +772,7 @@ string schema_output_GetErrorMessage(string sError, string sData = "")
     if (sError == "<validate_type>")
         return "instance does not match type";
     else if (sError == "<validate_enum>")
-        return "instance not found in ";
+        return "instance not found in enum";
     else if (sError == "<validate_minlength>")
         return "instance is shorter than minLength";
     else if (sError == "<validate_maxlength>")
@@ -793,17 +801,17 @@ string schema_output_GetErrorMessage(string sError, string sData = "")
         return "<@todo>";
     else if (sError == "<validate_contains>")
         return "<@todo>";
-    else if (sError == "<validate_mincontains")
-        return "instace contains less than minContains";
+    else if (sError == "<validate_mincontains>")
+        return "instance contains less than minContains";
     else if (sError == "<validate_maxcontains>")
         return "instance contains more than maxContains";
     else if (sError == "<validate_unevaluateditems>")
         return "<@todo>";
     else if (sError == "<validate_required>")
         return "instance missing required properties";
-    else if (sError == "validate_minproperties>")
+    else if (sError == "<validate_minproperties>")
         return "instance has less than minProperties";
-    else if (sError == "validate_maxproperties>")
+    else if (sError == "<validate_maxproperties>")
         return "instance has more than maxProperties";
     else if (sError == "<validate_dependentrequired>")
         return "instance missing dependent property";
@@ -884,6 +892,8 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
     if (sSchemaID == "")
         sSchemaID = SCHEMA_DEFAULT_OUTPUT;
 
+    /// @todo figure out a way to stop calling this all the time, or just set an initialized
+    ///     variable in the function for safety/efficiency.
     schema_core_CreateTables();
 
     string s = r"
@@ -2875,7 +2885,7 @@ json schema_validate_Contains(json jaInstance, json jContains, json jiMinContain
         }
         else if (nKeywordType == JSON_TYPE_OBJECT)
         {
-            int i; for (; i < nInstanceLength; i++)
+                int i; for (; i < nInstanceLength; i++)
             {
                 schema_scope_PushInstancePath(IntToString(i));
 
