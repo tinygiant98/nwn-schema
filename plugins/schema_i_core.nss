@@ -65,7 +65,7 @@ string schema_reference_EscapePointer(string sToken)
     }
     
     string s = "SELECT replace(replace(:token, '~', '~0'), '/', '~1')";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareQuery(s, TRUE);
     SqlBindString(q, ":token", sToken);
     
     schema_debug_ExitFunction(__FUNCTION__);
@@ -77,8 +77,8 @@ string schema_reference_UnescapePointer(string sPointer)
 {
     if (sPointer == "") return "";
 
-    string sQuery = "SELECT replace(replace(:pointer, '~1', '/'), '~0', '~')";
-    sqlquery q = schema_core_PrepareQuery(sQuery);
+    string s = "SELECT replace(replace(:pointer, '~1', '/'), '~0', '~')";
+    sqlquery q = schema_core_PrepareQuery(s, TRUE);
     SqlBindString(q, ":pointer", sPointer);
     
     return SqlStep(q) ? SqlGetString(q, 0) : sPointer;
@@ -92,8 +92,8 @@ string schema_reference_DecodeURI(string sURI)
         return sURI;
 
     // 1. Get the hex representation of the URI string
-    string sQuery = "SELECT hex(:uri)";
-    sqlquery q = schema_core_PrepareQuery(sQuery);
+    string s = "SELECT hex(:uri)";
+    sqlquery q = schema_core_PrepareQuery(s, TRUE);
     SqlBindString(q, ":uri", sURI);
     
     if (!SqlStep(q)) return sURI;
@@ -124,8 +124,8 @@ string schema_reference_DecodeURI(string sURI)
     }
     
     // 3. Cast the final hex string back to text
-    sQuery = "SELECT CAST(x'" + sResultHex + "' AS TEXT)";
-    q = schema_core_PrepareQuery(sQuery);
+    s = "SELECT CAST(x'" + sResultHex + "' AS TEXT)";
+    q = schema_core_PrepareQuery(s, TRUE);
     
     return SqlStep(q) ? SqlGetString(q, 0) : sURI;
 }
@@ -144,6 +144,26 @@ sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE)
 void schema_core_ExecuteQuery(string s, int bForceModule = FALSE)
 {
     SqlStep(schema_core_PrepareQuery(s, bForceModule));
+}
+
+sqlquery schema_core_PrepareModuleQuery(string s)
+{
+    return schema_core_PrepareQuery(s, TRUE);
+}
+
+sqlquery schema_core_PrepareCampaignQuery(string s)
+{
+    return schema_core_PrepareQuery(s, FALSE);
+}
+
+void schema_core_ExecuteModuleQuery(string s)
+{
+    schema_core_ExecuteQuery(s, TRUE);
+}
+
+void schema_core_ExeucteCampaignQuery(string s)
+{
+    schema_core_ExecuteQuery(s, FALSE);
 }
 
 void schema_core_BeginTransaction(int bForceModule = FALSE)
@@ -436,7 +456,7 @@ json schema_scope_DeconstructPointer(string sPointer)
         SELECT json_group_array(value) FROM split WHERE str != :str || '/';
     ";
     
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindString(q, ":str", sPointer);
 
     schema_debug_ExitFunction(__FUNCTION__);
@@ -479,7 +499,7 @@ json schema_scope_DeconstructPath(string sPath)
         )
         SELECT json_group_array(value) FROM (SELECT value FROM split WHERE str != :str || '/' ORDER BY i);
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindString(q, ":str", sPath);
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
 }
@@ -537,7 +557,7 @@ json schema_scope_MergeArrays(json jA, json jB)
             ORDER BY value
         );
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":a", jA);
     SqlBindJson(q, ":b", jB);
 
@@ -906,7 +926,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
         WHERE verbosity = :verbosity
             AND schema_id = :schema_id;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareCampaignQuery(s);
     SqlBindString(q, ":verbosity", sVerbosity);
     SqlBindString(q, ":schema_id", sSchemaID);
 
@@ -1009,7 +1029,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
         FROM prop_types;
     ";
 
-    q = schema_core_PrepareQuery(s);
+    q = schema_core_PrepareModuleQuery(s);
     SqlBindString(q, ":verbosity", sVerbosity);
     SqlBindJson(q, ":schema", joSchema);
     
@@ -1025,7 +1045,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
             ON CONFLICT(verbosity, schema) DO UPDATE SET
                 output = :output;
         ";
-        sqlquery q = schema_core_PrepareQuery(s);
+        sqlquery q = schema_core_PrepareCampaignQuery(s);
         SqlBindString(q, ":verbosity", sVerbosity);
         SqlBindJson(q, ":schema", joSchema);
         SqlBindJson(q, ":output", joOutputUnit);
@@ -1199,7 +1219,7 @@ json schema_output_GetEvaluatedKeys(json joOutputUnit, string sAnnotationKey)
         ) AS combined
         JOIN json_each(combined.val) AS item;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":output_unit", joOutputUnit);
     SqlBindString(q, ":annotation_key", sAnnotationKey);
 
@@ -1241,7 +1261,7 @@ json schema_output_GetUnevaluatedKeys(json joOutputUnit, json jaInstanceKeys, st
 //        )
 //        ORDER BY avail.value;
 //    ";
-//    sqlquery q = schema_core_PrepareQuery(s);
+//    sqlquery q = schema_core_PrepareCampaignQuery(s);
 //    SqlBindJson(q, ":instance_keys", jaInstanceKeys);
 //    SqlBindJson(q, ":evaluated_keys", schema_output_GetEvaluatedKeys(joOutputUnit, sAnnotationKey));
 //
@@ -1341,7 +1361,7 @@ json schema_output_Basic(json joOutputUnit)
         FROM output_filter;
     ";
 
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":output", joOutputUnit);
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JSON_NULL;
@@ -1405,7 +1425,7 @@ json schema_output_Detailed(json joOutputUnit)
         WHERE row_num = (SELECT MAX(row_num) FROM output_folded);}
     ";
 
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":output", joOutputUnit);
 
     return SqlStep(q) ? SqlGetJson(q, 0) : JSON_NULL;
@@ -1516,7 +1536,7 @@ json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
         LIMIT 1;
     ";
 
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":schema", joSchema);
     SqlBindString(q, ":anchor", sAnchor);
 
@@ -1600,7 +1620,7 @@ void schema_reference_DeleteSchema(string sID)
         DELETE FROM schema_schema
         WHERE schema_id = :schema_id;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareCampaignQuery(s);
     SqlBindString(q, ":schema_id", sID);
 
     SqlStep(q);
@@ -1625,9 +1645,8 @@ void schema_reference_SaveSchema(json joSchema)
         INSERT INTO schema_schema (schema)
         VALUES (:schema);
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareCampaignQuery(s);
     SqlBindJson(q, ":schema", joSchema);
-
     SqlStep(q);
 }
 
@@ -1659,7 +1678,7 @@ json schema_reference_GetSchema(string sSchemaID)
         WHERE schema_id = :id
             OR schema_id = :id || '#';
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareCampaignQuery(s);
     SqlBindString(q, ":id", sSchemaID);
 
     json joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
@@ -1667,7 +1686,8 @@ json schema_reference_GetSchema(string sSchemaID)
         return joSchema;
 
     /// @note Attempt to retrieve the schema from the admin table.
-    q = schema_core_PrepareQuery(s);
+    /// @todo what about resetting the query instead?
+    q = schema_core_PrepareCampaignQuery(s);
     SqlBindString(q, ":id", sSchemaID);
 
     joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
@@ -1810,7 +1830,7 @@ int schema_reference_CheckMatch(json jaMatch, json jaCriteria)
             END
         FROM pairs;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareCampaignQuery(s);
     SqlBindJson(q, ":match", jaMatch);
     SqlBindJson(q, ":criteria", jaCriteria);
 
@@ -2017,7 +2037,7 @@ json schema_keyword_LoadTypeMap(string sSchemaID)
         JOIN schema_schema s ON k.schema_id = s.id
         WHERE s.schema_id = :id;
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareCampaignQuery(s);
     SqlBindString(q, ":id", sSchemaID);
 
     json joMap = JsonObject();
@@ -2089,7 +2109,7 @@ json schema_validate_Type(json jInstance, json jSchema)
                     SELECT (CAST(val AS INTEGER) == val)
                     FROM (SELECT json_extract(:instance, '$') AS val);
                 ";
-                sqlquery q = SqlPrepareQueryObject(GetModule(), s);
+                sqlquery q = schema_core_PrepareModuleQuery(s);
                 SqlBindJson(q, ":instance", jInstance);
 
                 if (SqlStep(q) ? SqlGetInt(q, 0) : FALSE)
@@ -2170,11 +2190,11 @@ json schema_validate_Enum(json jInstance, json jSchema, string sKeyword)
     // Fallback for strings with encoding issues
     if (JsonGetType(jInstance) == JSON_TYPE_STRING)
     {
-        string sQuery = "SELECT 1 FROM json_each(:schema) WHERE " +
+        string s = "SELECT 1 FROM json_each(:schema) WHERE " +
             "CAST(CAST(value AS BLOB) AS TEXT) = " +
             "CAST(CAST(json_extract(json(:instance), '$') AS BLOB) AS TEXT)";
 
-        sqlquery q = schema_core_PrepareQuery(sQuery);
+        sqlquery q = schema_core_PrepareModuleQuery(s);
         SqlBindJson(q, ":schema", jSchema);
         SqlBindJson(q, ":instance", jInstance);
 
@@ -2202,7 +2222,7 @@ int schema_util_RegExpMatch(string sPattern, string sString)
             REGEXP
             CAST(CAST(json_extract(json(:pattern), '$') AS BLOB) AS TEXT);
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":string", JsonString(sString));
     SqlBindJson(q, ":pattern", JsonString(sPattern));
     return SqlStep(q);
@@ -2231,7 +2251,7 @@ json schema_util_JsonObjectGet(json jObject, string sKey)
         WHERE
             CAST(CAST(key AS BLOB) AS TEXT) = CAST(CAST(json_extract(json(:key), '$') AS BLOB) AS TEXT);
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":obj", jObject);
     SqlBindJson(q, ":key", JsonString(sKey));
     
@@ -2258,7 +2278,7 @@ int schema_util_HasKey(json jObject, string sKey)
         WHERE 
             CAST(CAST(key AS BLOB) AS TEXT) = CAST(CAST(json_extract(json(:key), '$') AS BLOB) AS TEXT);
     ";
-    sqlquery q = schema_core_PrepareQuery(s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":obj", jObject);
     SqlBindJson(q, ":key", JsonString(sKey));
     
@@ -2355,7 +2375,7 @@ json schema_validate_Format(json jsInstance, json jSchema)
                 END
             FROM validation_results;
         ";
-        sqlquery q = SqlPrepareQueryObject(GetModule(), s);
+        sqlquery q = schema_core_PrepareModuleQuery(s);
         SqlBindString(q, ":data", sInstance);
 
         bValid = SqlStep(q) ? SqlGetInt(q, 0) : FALSE;
@@ -2525,7 +2545,7 @@ json schema_validate_Assertion(string sKeyword, json jInstance, string sOperator
                 json_extract(:schema, '$') as s_val
         );
     ";
-    sqlquery q = SqlPrepareQueryObject(GetModule(), s);
+    sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindJson(q, ":instance", jInstance);
     SqlBindJson(q, ":schema", jSchema);
     SqlBindString(q, ":op", sOperator);
@@ -3366,7 +3386,7 @@ json schema_validate_Object(
     return jaOutput;
 }
 
-json schema_validate_Unevaluated(json jInstance, json joSchema, json joOutputUnit)
+void schema_validate_Unevaluated(json jInstance, json joSchema, json joOutputUnit)
 {
     /// @brief unevaluatedItems.  The value of `unevaluatedItems` must be a valid schema.  Validation
     ///     only occurs against instance items that have not been previously evaluated by `prefixItems`,
@@ -3453,8 +3473,6 @@ json schema_validate_Unevaluated(json jInstance, json joSchema, json joOutputUni
             schema_scope_PopSchemaPath();
         }
     }
-
-    return joOutputUnit;
 }
 
 /// @brief Validates the applicator "not" keyword.
@@ -4337,7 +4355,7 @@ json schema_core_Validate(json jInstance, json joSchema)
     ///         keys from the result set.
     ///     [ ] This should return a set ready to go straight into the output.
     ///     [ ] check keyword map
-    joOutputUnit = schema_validate_Unevaluated(jInstance, joSchema, joOutputUnit);
+    schema_validate_Unevaluated(jInstance, joSchema, joOutputUnit);
 
     // if (bDynamicAnchor)
     //    schema_scope_PopDynamic();
