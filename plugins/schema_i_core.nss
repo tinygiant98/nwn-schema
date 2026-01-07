@@ -178,13 +178,14 @@ void schema_scope_Destroy()
 ///     new members are initialized to the default values in joScopes.
 void schema_scope_ResizeArrays()
 {
+    schema_debug_EnterFunction(__FUNCTION__);
+
     int nRequiredLength = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH") + 1;
 
     json jaScopes = JsonObjectKeys(joScopes);
     int i; for (; i < JsonGetLength(jaScopes); i++)
     {
         string sScope = JsonGetString(JsonArrayGet(jaScopes, i));
-        
         json joScope = GetLocalJson(GetModule(), sScope);
         if (JsonGetType(joScope) != JSON_TYPE_ARRAY)
             joScope = JsonArray();        
@@ -197,9 +198,13 @@ void schema_scope_ResizeArrays()
         else if (nLength < nRequiredLength)
         {
             while (JsonGetLength(joScope) < nRequiredLength)
-                JsonArrayInsertInplace(joScope, JsonObjectGet(joScopes, sScope));
+                joScope = JsonArrayInsert(joScope, JsonObjectGet(joScopes, sScope));
         }
+
+        SetLocalJson(GetModule(), sScope, joScope);
     }
+
+    schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Retrieve the current scope depth.
@@ -237,6 +242,7 @@ void schema_scope_PushArrayItem(string sScope, json jItem, int nIndex = -1)
     if (JsonGetType(jaScopes) != JSON_TYPE_ARRAY)
     {
         if (b) schema_debug_Message("jaScopes is not array");
+        if (b) schema_debug_ExitFunction(__FUNCTION__);
         return;
     }
 
@@ -245,6 +251,7 @@ void schema_scope_PushArrayItem(string sScope, json jItem, int nIndex = -1)
     if (JsonGetType(jaScope) != JSON_TYPE_ARRAY)
     {
         if (b) schema_debug_Message("jaScope is not array");
+        if (b) schema_debug_ExitFunction(__FUNCTION__);
         return;
     }
 
@@ -254,6 +261,8 @@ void schema_scope_PushArrayItem(string sScope, json jItem, int nIndex = -1)
         JsonArraySetInplace(jaScopes, nDepth, JsonArraySet(jaScope, nIndex, jItem));
 
     if (b) schema_debug_Value("Final jaScopes", JsonDump(jaScopes));
+
+    if (b) schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Push a new item into the specified scope array at the current depth.
@@ -391,8 +400,13 @@ string schema_reference_EscapePointer(string sToken)
 /// @returns A string representing the pointer, or an empty string if the input is null or empty.
 string schema_scope_ConstructPointer(json jaPointer = JSON_NULL)
 {
+    schema_debug_EnterFunction(__FUNCTION__);
+
     if (JsonGetType(jaPointer) != JSON_TYPE_ARRAY || JsonGetLength(jaPointer) == 0)
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "jaPointer is not array");
         return "";
+    }
 
     string sPath;
    
@@ -402,6 +416,7 @@ string schema_scope_ConstructPointer(json jaPointer = JSON_NULL)
         sPath += "/" + schema_reference_EscapePointer(sPart);
     }
     
+    schema_debug_ExitFunction(__FUNCTION__);
     return sPath;
 }
 
@@ -984,14 +999,20 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
 ///     path from the schema path scope.
 void schema_output_SetKeywordLocation(json joOutputUnit)
 {
-    JsonObjectSetInplace(joOutputUnit, "keywordLocation", JsonString(schema_scope_ConstructSchemaPath()));
+    schema_debug_EnterFunction(__FUNCTION__);
+    json j = JsonString(schema_scope_ConstructSchemaPath());
+    JsonObjectSetInplace(joOutputUnit, "keywordLocation", j);
+    //JsonObjectSetInplace(joOutputUnit, "keywordLocation", JsonString(schema_scope_ConstructSchemaPath()));
+    schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Set the `instanceLocation` value into joOutputUnit by constructing the current instance
 ///     path from the instance path scope.
 void schema_output_SetInstanceLocation(json joOutputUnit)
 {
-    JsonObjectSetInplace(joOutputUnit, "instanceLocation", JsonString(schema_scope_ConstructInstancePath()));
+    json j = JsonString(schema_scope_ConstructInstancePath());
+    JsonObjectSetInplace(joOutputUnit, "instanceLocation", j);
+    //JsonObjectSetInplace(joOutputUnit, "instanceLocation", JsonString(schema_scope_ConstructInstancePath()));
 }
 
 /// @private Set the `absoluteKeywordLocation` value into joOutputUnit by constructing the current
@@ -1011,6 +1032,9 @@ void schema_output_SetAbsoluteKeywordLocation(json joOutputUnit)
 ///     recognized as boolean for comparison purposes.
 json schema_output_GetOutputUnit(string sSource = "")
 {
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sSource", JsonString(sSource));
+
     /// @todo
     ///     [ ] or make it a user configuration (source)
     ///     [ ] change default boolean to null?
@@ -1031,6 +1055,7 @@ json schema_output_GetOutputUnit(string sSource = "")
     /// @todo temp for testing
     JsonObjectSetInplace(joOutputUnit, "uuid", JsonString(GetRandomUUID()));
 
+    schema_debug_ExitFunction(__FUNCTION__);
     return joOutputUnit;
 }
 
@@ -2141,8 +2166,6 @@ int schema_keyword_Annotate()
 ///         [ ] $recursiveRef, $recursiveAnchor: only supported in draft-2019-09; deprecated in draft-2020-12
 ///         [ ] 'id' (superseded by '$id' in draft-6)
 ///         [ ] definitions (deprecated in draft-2020-12, replaced by '$defs')
-///     [ ] How do we handle an nDraft = 0 (i.e. the current schema is a string, not a json-schema.org draft)?
-///         if nDraft = 0, then it's not a draft schema, so we shouldn't be here anyway?
 
 ///     [ ] Need an "environment prep" function that can be called by the entrant functions that will
 ///         [ ] set the current metaschema draft version
@@ -3922,10 +3945,7 @@ json schema_core_Validate(json jInstance, json joSchema)
         return joOutputUnit;
     }
 
-    int bDebugSkip = FALSE;
-
     json jResult = JsonNull();
-    
     if (joSchema == JSON_TRUE || joSchema == JsonObject())
     {
         schema_debug_ExitFunction(__FUNCTION__);
@@ -4001,7 +4021,7 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     /// @note Handle $id (or id) to establish new Base URI context.
     string sID = JsonGetString(JsonObjectGet(joSchema, "$id"));
-    if (sID == "" && nDraft < SCHEMA_DRAFT_2019_09)
+    if (sID == "" && schema_keyword_IsActive("id"))
         sID = JsonGetString(JsonObjectGet(joSchema, "id"));
 
     if (sID != "")
@@ -4009,7 +4029,7 @@ json schema_core_Validate(json jInstance, json joSchema)
         // Resolve ID against current base schema
         json joBase = schema_scope_GetBaseSchema();
         string sBaseURI = JsonGetString(JsonObjectGet(joBase, "$id"));
-        if (sBaseURI == "" && nDraft < SCHEMA_DRAFT_2019_09)
+        if (sBaseURI == "" && schema_keyword_IsActive("id"))
             sBaseURI = JsonGetString(JsonObjectGet(joBase, "id"));
         
         // If we have a base URI, resolve the new ID against it
@@ -4152,17 +4172,16 @@ json schema_core_Validate(json jInstance, json joSchema)
     else
     {
         jRef = JsonObjectGet(joSchema, "$dynamicRef");
-        if (JsonGetType(jRef) != JSON_TYPE_NULL)
+        if (JsonGetType(jRef) != JSON_TYPE_NULL && schema_keyword_IsActive("$dynamicRef"))
         {
             schema_scope_PushSchemaPath("$dynamicRef");
-            int bRevertToRef = nDraft >= SCHEMA_DRAFT_2019_09 && nDraft <= SCHEMA_DRAFT_2020_12;
-            jResult = schema_core_Validate(jInstance, schema_reference_ResolveDynamicRef(joSchema, jRef, bRevertToRef));
+            jResult = schema_core_Validate(jInstance, schema_reference_ResolveDynamicRef(joSchema, jRef, TRUE));
             schema_scope_PopSchemaPath();
         }
         else
         {
             jRef = JsonObjectGet(joSchema, "$recursiveRef");
-            if (JsonGetType(jRef) != JSON_TYPE_NULL)
+            if (JsonGetType(jRef) != JSON_TYPE_NULL && schema_keyword_IsActive("$recursiveRef"))
             {
                 schema_scope_PushSchemaPath("$recursiveRef");
                 jResult = schema_core_Validate(jInstance, schema_reference_ResolveRecursiveRef(joSchema));
@@ -4180,7 +4199,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             if (schema_output_GetValid(jResult))
             {
                 schema_output_InsertAnnotation(joOutputUnit, jResult);
-                if (nDraft >= SCHEMA_DRAFT_2019_09)
+                if (schema_keyword_IsModern())
                 {
                     jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(jResult));
                     jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(jResult));
@@ -4195,7 +4214,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             ///     [ ] What do we do with a JsonNull() return from $ref validation?
         }
 
-        if (nDraft >= SCHEMA_DRAFT_4 && nDraft <= SCHEMA_DRAFT_7)
+        if (schema_keyword_IsLegacy())
         {
             if (bDynamicAnchor)
                 schema_scope_PopDynamic();
@@ -4239,23 +4258,6 @@ json schema_core_Validate(json jInstance, json joSchema)
             sKey == "$defs" || sKey == "definitions" || 
             sKey == "$anchor" || sKey == "$dynamicAnchor" || sKey == "$recursiveAnchor")
             continue;
-
-        /// @todo let's modify this approach once this is implemented:
-        ///     for the groups, we'll do the keyword checks individually to the map, thus avoiding the
-        ///     need for nDraft (?).
-        ///     after the groups, we'll run a `is skey in map` check for all the remaining keys
-        
-        //// Check if the keyword applies to the current instance type
-        //if (!schema_validate_AssertInstanceType(sKey, jInstance))
-        //    continue;
-
-        /// @note Our grouped keyword evaluations contain draft guards because they could potentially
-        ///     end-around or keyword/draft matching system given the way they are extracted from
-        ///     the json schema.  If the user provides a schema that contains a keyword that is invalid
-        ///     for the draft (such as additionalItems in draft 2020_12), including the keyword items
-        ///     (which is valid in 2020_12) will automatically include the additionalItems keyword, even
-        ///     though it's invalid.  The single keyword validation process checks for those, so no
-        ///     issue in those, only these groups need guarding.
 
         if (sKey == "if" || sKey == "then" || sKey == "else")
         {
@@ -4379,11 +4381,11 @@ json schema_core_Validate(json jInstance, json joSchema)
         else if (sKey == "const")
             jResult = schema_validate_Enum(jInstance, jKeySchema, sKey);
         else if (sKey == "allOf")
-            jResult = schema_validate_AllOf(jInstance, jKeySchema, nDraft >= SCHEMA_DRAFT_2019_09);
+            jResult = schema_validate_AllOf(jInstance, jKeySchema);
         else if (sKey == "anyOf")
-            jResult = schema_validate_AnyOf(jInstance, jKeySchema, nDraft >= SCHEMA_DRAFT_2019_09);
+            jResult = schema_validate_AnyOf(jInstance, jKeySchema);
         else if (sKey == "oneOf")
-            jResult = schema_validate_OneOf(jInstance, jKeySchema, nDraft >= SCHEMA_DRAFT_2019_09);
+            jResult = schema_validate_OneOf(jInstance, jKeySchema);
         else if (sKey == "not")
             jResult = schema_validate_Not(jInstance, jKeySchema);
         else if (sKey == "required")
@@ -4426,7 +4428,7 @@ json schema_core_Validate(json jInstance, json joSchema)
                 else
                     schema_output_InsertError(joOutputUnit, joRes);
 
-                if (i == nResultLength && nDraft >= SCHEMA_DRAFT_2019_09)
+                if (i == nResultLength && schema_keyword_IsModern())
                 {
                     jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joRes));
                     jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(joRes));
@@ -4453,7 +4455,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             if (schema_output_GetValid(jResult))
             {
                 schema_output_InsertAnnotation(joOutputUnit, jResult, sSource);
-                if (nDraft >= SCHEMA_DRAFT_2019_09)
+                if (schema_keyword_IsModern())
                 {
                     jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(jResult));
                     jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(jResult));
@@ -4470,7 +4472,7 @@ json schema_core_Validate(json jInstance, json joSchema)
         }
     }
 
-    if (nDraft >= SCHEMA_DRAFT_2019_09 && schema_output_GetValid(joOutputUnit))
+    if (schema_keyword_IsModern() && schema_output_GetValid(joOutputUnit))
     {
         if (JsonGetLength(jaEvaluatedProperties) > 0)
             schema_output_SetAnnotation(joOutputUnit, "evaluatedProperties", jaEvaluatedProperties);
@@ -4512,7 +4514,7 @@ json schema_core_Validate(json jInstance, json joSchema)
 ///                                     PUBLIC API
 /// -----------------------------------------------------------------------------------------------
 
-int ValidateSchema(json joSchema, int nDraft = 0);
+int ValidateSchema(json joSchema);
 int ValidateInstance(json jInstance, string sID = "");
 
 int ValidateInstanceAdHoc(json jInstance, json joSchema)
