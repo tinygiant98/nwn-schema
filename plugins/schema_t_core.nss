@@ -1569,6 +1569,9 @@ void main()
         {
             json joSchema = JsonArrayGet(jaTrustedSchema, i);
             json jID = JsonObjectGet(joSchema, "$id");
+            if (JsonGetType(jID) == JSON_TYPE_NULL)
+                jID = JsonObjectGet(joSchema, "id");
+
             Debug("Adding schema for " + JsonGetString(jID));
             schema_reference_SaveSchema(joSchema);
         }

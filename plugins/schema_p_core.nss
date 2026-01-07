@@ -111,10 +111,16 @@ void schema_OnPlayerChat()
     }
     else if (TEST == 6)
     {
-        json j = JsonParse(r"[""original value!""]");
-        Notice("Before changeJsonValue: " + JsonDump(j));
-        test_changeJsonValue(j);
-        Notice("After changeJsonValue: " + JsonDump(j));
+        json j = JsonParse(r"[""testvalue""]");
+        SetLocalJson(GetModule(), "TEST_JSON", j);
+
+        json j1 = GetLocalJson(GetModule(), "TEST_JSON");
+        Notice("j1 (retrieved) = " + JsonDump(j1));
+
+        JsonArrayInsertInplace(j1, JsonString("additional_value"));
+
+        json j2 = GetLocalJson(GetModule(), "TEST_JSON");
+        Notice("j2 (retrieved after mod) = " + JsonDump(j2));
 
 
     }
