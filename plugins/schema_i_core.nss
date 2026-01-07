@@ -26,7 +26,6 @@ json joScopes = JsonParse(r"{
     ""SCHEMA_SCOPE_DYNAMIC"": [],
     ""SCHEMA_SCOPE_INSTANCEPATH"": [],
     ""SCHEMA_SCOPE_LEXICAL"": [],
-    ""SCHEMA_SCOPE_SCHEMA"": """",
     ""SCHEMA_SCOPE_SCHEMAPATH"": [],
     ""SCHEMA_SCOPE_KEYMAP"": []
 }");
@@ -175,7 +174,7 @@ void schema_scope_Destroy()
 }
 
 /// @private Resize scope arrays to match the current scope depth.  If the array must grow,
-///     new members are initialized to the default values in joScopes.
+///     new members are initialized to the default values found in joScopes.
 void schema_scope_ResizeArrays()
 {
     schema_debug_EnterFunction(__FUNCTION__);
@@ -210,8 +209,8 @@ void schema_scope_ResizeArrays()
 /// @private Retrieve the current scope depth.
 /// @returns The current scope depth, base 1.
 /// @note This will rarely be greater than one, however, this value will increment
-///     if nested validations are initiated, such as referencing a schema that
-///     has not been previously validated.
+///     if nested validations are initiated, such as referencing a non-trusted schema
+///     that has not been previously validated.
 int schema_scope_GetDepth()
 {
     int nDepth = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH");
@@ -229,40 +228,20 @@ int schema_scope_GetDepth()
 /// @param jItem The json object to push into the array.
 void schema_scope_PushArrayItem(string sScope, json jItem, int nIndex = -1)
 {
-    int b = sScope == "SCHEMA_SCOPE_KEYMAP";
-
-    if (b)
-        schema_debug_EnterFunction(__FUNCTION__);
-
     int nDepth = schema_scope_GetDepth();
-    if (b) schema_debug_Value("nDepth", IntToString(nDepth));
     json jaScopes = GetLocalJson(GetModule(), sScope);
-    if (b) schema_debug_Value("jaScopes", JsonDump(jaScopes));
 
     if (JsonGetType(jaScopes) != JSON_TYPE_ARRAY)
-    {
-        if (b) schema_debug_Message("jaScopes is not array");
-        if (b) schema_debug_ExitFunction(__FUNCTION__);
         return;
-    }
 
     json jaScope = JsonArrayGet(jaScopes, nDepth);
-    if (b) schema_debug_Value("jaScope", JsonDump(jaScope));
     if (JsonGetType(jaScope) != JSON_TYPE_ARRAY)
-    {
-        if (b) schema_debug_Message("jaScope is not array");
-        if (b) schema_debug_ExitFunction(__FUNCTION__);
         return;
-    }
 
     if (nIndex == -1)
         JsonArraySetInplace(jaScopes, nDepth, JsonArrayInsert(jaScope, jItem));
     else if (nIndex >= 0)
         JsonArraySetInplace(jaScopes, nDepth, JsonArraySet(jaScope, nIndex, jItem));
-
-    if (b) schema_debug_Value("Final jaScopes", JsonDump(jaScopes));
-
-    if (b) schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Push a new item into the specified scope array at the current depth.
@@ -296,7 +275,6 @@ json schema_scope_Get(string sScope)
 /// @private Convenience functions to retrieve scope data at the current depth.
 json schema_scope_GetDynamic()      {return schema_scope_Get("SCHEMA_SCOPE_DYNAMIC");}
 json schema_scope_GetLexical()      {return schema_scope_Get("SCHEMA_SCOPE_LEXICAL");}
-json schema_scope_GetSchema()       {return schema_scope_Get("SCHEMA_SCOPE_SCHEMA");}
 json schema_scope_GetSchemaPath()   {return schema_scope_Get("SCHEMA_SCOPE_SCHEMAPATH");}
 json schema_scope_GetInstancePath() {return schema_scope_Get("SCHEMA_SCOPE_INSTANCEPATH");}
 json schema_scope_GetKeymap()       {return schema_scope_Get("SCHEMA_SCOPE_KEYMAP");}
@@ -387,7 +365,9 @@ string schema_reference_EscapePointer(string sToken)
         return "";
     }
     
-    string s = "SELECT replace(replace(:token, '~', '~0'), '/', '~1')";
+    string s = r"
+        SELECT replace(replace(:token, '~', '~0'), '/', '~1');
+    ";
     sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindString(q, ":token", sToken);
     
@@ -522,28 +502,6 @@ void schema_scope_PushContext(string sContextKey, json jaContext)
     schema_scope_PushArrayItem(sScopeKey, jaContexts);
 }
 
-/// @private Push a schema into the schema scope array.  If the schema is a known
-///     json-schema.org draft, store the schema as its SCHEMA_DRAFT_* integer value.
-/// @param sSchema The schema $id to push into the schema scope array.
-void schema_scope_PushSchema(string sSchema)
-{
-    if (sSchema == "")
-        return;
-
-    string r = "^https?:\\/\\/json-schema\\.org\\/draft[-\\/](\\d*-?\\d*)\\/schema#?$";
-    string sDraft = JsonGetString(JsonArrayGet(RegExpMatch(r, sSchema), 1));
-
-    json jSchema;
-    if      (sDraft == "04")      jSchema = JsonInt(SCHEMA_DRAFT_4);
-    else if (sDraft == "06")      jSchema = JsonInt(SCHEMA_DRAFT_6);
-    else if (sDraft == "07")      jSchema = JsonInt(SCHEMA_DRAFT_7);
-    else if (sDraft == "2019-09") jSchema = JsonInt(SCHEMA_DRAFT_2019_09);
-    else if (sDraft == "2020-12") jSchema = JsonInt(SCHEMA_DRAFT_2020_12);
-    else                          jSchema = JsonString(sSchema);
-
-    schema_scope_PushItem("SCHEMA_SCOPE_SCHEMA", jSchema);
-}
-
 /// @brief Remove the last member of a scope array ensuring the array length
 ///     matches current scope depth.
 /// @param sScope Scope type; SCHEMA_SCOPE_*
@@ -569,7 +527,6 @@ void schema_scope_Pop(string sScope)
 /// @private Convenience functions to pop the last member from scope arrays.
 void schema_scope_PopLexical()      {schema_scope_Pop("SCHEMA_SCOPE_LEXICAL");}
 void schema_scope_PopDynamic()      {schema_scope_Pop("SCHEMA_SCOPE_DYNAMIC");}
-void schema_scope_PopSchema()       {schema_scope_Pop("SCHEMA_SCOPE_SCHEMA");}
 void schema_scope_PopSchemaPath()   {schema_scope_Pop("SCHEMA_SCOPE_SCHEMAPATH");}
 void schema_scope_PopInstancePath() {schema_scope_Pop("SCHEMA_SCOPE_INSTANCEPATH");}
 void schema_scope_PopKeymap()       {schema_scope_Pop("SCHEMA_SCOPE_KEYMAP");}
@@ -1000,9 +957,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
 void schema_output_SetKeywordLocation(json joOutputUnit)
 {
     schema_debug_EnterFunction(__FUNCTION__);
-    json j = JsonString(schema_scope_ConstructSchemaPath());
-    JsonObjectSetInplace(joOutputUnit, "keywordLocation", j);
-    //JsonObjectSetInplace(joOutputUnit, "keywordLocation", JsonString(schema_scope_ConstructSchemaPath()));
+    JsonObjectSetInplace(joOutputUnit, "keywordLocation", JsonString(schema_scope_ConstructSchemaPath()));
     schema_debug_ExitFunction(__FUNCTION__);
 }
 
@@ -1010,9 +965,9 @@ void schema_output_SetKeywordLocation(json joOutputUnit)
 ///     path from the instance path scope.
 void schema_output_SetInstanceLocation(json joOutputUnit)
 {
-    json j = JsonString(schema_scope_ConstructInstancePath());
-    JsonObjectSetInplace(joOutputUnit, "instanceLocation", j);
-    //JsonObjectSetInplace(joOutputUnit, "instanceLocation", JsonString(schema_scope_ConstructInstancePath()));
+    schema_debug_EnterFunction(__FUNCTION__);
+    JsonObjectSetInplace(joOutputUnit, "instanceLocation", JsonString(schema_scope_ConstructInstancePath()));
+    schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Set the `absoluteKeywordLocation` value into joOutputUnit by constructing the current
@@ -1185,13 +1140,6 @@ json schema_output_GetEvaluatedItems(json joOutputUnit)
 {
     return schema_output_GetEvaluatedKeys(joOutputUnit, "evaluatedItems");
 }
-
-/// @todo
-///     See where *Inplace functions can be used to make json building faster, in the few
-///         places where json objects are built from scratch or modified directly.  The
-///         scope management functions will probably benefit the most from this methodology.
-///         *Inplace functions are twice as fast as building a new object and they modify
-///         the saved value direction, so can even avoid the SetLocalJson calls (?).
 
 /// @private Aggregate evaluated keys from adjacent and child nodes, compare to
 ///     the entire set of instance keys and return the unevaluated keys as an array.
@@ -2206,7 +2154,8 @@ json schema_validate_Type(json jInstance, json jSchema)
             if (nInstanceType == JSON_TYPE_INTEGER || nInstanceType == JSON_TYPE_FLOAT)
             {
                 /// @note We're using a query here in case we run into numbers larger than
-                ///     the signed 32-bit maximum.
+                ///     the signed 32-bit maximum.  This should handle up to sqlite's maximum
+                ///     integer/float size (64-bit).
                 string s = r"
                     SELECT (CAST(val AS INTEGER) == val)
                     FROM (SELECT json_extract(:instance, '$') AS val);
@@ -2284,27 +2233,38 @@ json schema_validate_Enum(json jInstance, json jSchema, string sKeyword)
     if (sKeyword == "const")
         jSchema = JsonArrayInsert(JsonArray(), jSchema);
 
-    schema_debug_ExitFunction(__FUNCTION__);
-
     if (JsonGetType(JsonFind(jSchema, jInstance)) != JSON_TYPE_NULL)
+    {
+        schema_debug_ExitFunction(__FUNCTION__, "instance type not found in schema");
         return joOutputUnit;
+    }
 
-    // Fallback for strings with encoding issues
+    /// @note Non-ascii characters run into encoding issues when parsed into json
+    ///     strings and are usually represented by escaped unicode representations,
+    ///     sometimes being mangled/mojibaked.  This query should un-mangle the
+    ///     unicode values into the original characters.
     if (JsonGetType(jInstance) == JSON_TYPE_STRING)
     {
-        string s = "SELECT 1 FROM json_each(:schema) WHERE " +
-            "CAST(CAST(value AS BLOB) AS TEXT) = " +
-            "CAST(CAST(json_extract(json(:instance), '$') AS BLOB) AS TEXT)";
-
+        string s = r"
+            SELECT 1
+            FROM json_each(:schema)
+            WHERE
+                CAST(CAST(value AS BLOB) AS TEXT) =
+                CAST(CAST(json_extract(json(:instance), '$') AS BLOB) AS TEXT);
+        ";
         sqlquery q = schema_core_PrepareModuleQuery(s);
         SqlBindJson(q, ":schema", jSchema);
         SqlBindJson(q, ":instance", jInstance);
 
         if (SqlStep(q))
+        {
+            schema_debug_ExitFunction(__FUNCTION__, "instance type found in schema");
             return joOutputUnit;
+        }
     }
 
     schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
+    schema_debug_ExitFunction(__FUNCTION__);
     return joOutputUnit;
 }
 
@@ -2414,6 +2374,7 @@ json schema_validate_Pattern(json jsInstance, json jSchema)
 
 /// @todo
 ///     [ ] This whole function
+////    [ ] error reporting strings above.  Use them or get rid of them.
 
 /// @brief Validates the string "format" keyword.
 /// @param jsInstance The instance to validate.
@@ -3976,7 +3937,6 @@ json schema_core_Validate(json jInstance, json joSchema)
     string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
     if (sSchema != "")
     {
-        schema_scope_PushSchema(sSchema);
         schema_scope_SetBaseSchema(joSchema);
 
         json jaKeyMap = schema_keyword_GetFullMap(sSchema);
