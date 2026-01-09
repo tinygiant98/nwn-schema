@@ -4,6 +4,76 @@
 #include "util_i_unittest"
 #include "util_c_schema"
 
+/// -----------------------------------------------------------------------------------------------
+///                                  PUBLIC FUNCTION PROTOTYPES
+/// -----------------------------------------------------------------------------------------------
+
+/// @brief Validate a schema against the schema's designated metaschema and, optionally, save the
+///     schema to the schema database if validation passes.
+/// @param joSchema Schema to validate.
+/// @param bSaveIfValid TRUE to save the schema to the database, if valid.
+/// @note If joSchema does not have a $schema key, or the referenced $schema cannot be resolved,
+///     the default metaschema will be used, which is normally the most recent metaschema draft
+///     from json-schema.org.
+int ValidateSchema(json joSchema, int bSaveIfValid = TRUE);
+
+/// @brief Validate an instance against a specific schema.
+/// @param jInstance Instance to validate.
+/// @param sSchema $id of schema to validate instance against.
+/// @note Since instances generally do not carry $schema keys, if sSchema is an empty string or
+///     the schema identified by sSchema cannot be found in the database, the validation will fail.
+int ValidateInstance(json jInstance, string sSchema);
+
+/// @brief Validate an instance against a schema.
+/// @param jInstance Instance to validate.
+/// @param joSchema Schema to validate instance against.
+/// @note If joSchema contains an $id, the system will first attempt to retrieve a previously-
+///     validated schema from the schema database.  If not found, the system will first attempt
+///     to validate joSchema against its designated metaschema and, if found to be valid, will
+///     then validate jInstance against joSchema.
+/// @note If joSchema is unknown to the schema system, successfully validates against its
+///     designated metaschema, and contains a unique $id, joSchema will be saved to the schema
+///     database for future use.
+int ValidateInstanceAdHoc(json jInstance, json joSchema);
+
+const int SCHEMA_OUTPUT_LEVEL_VERBOSE = 0;
+const int SCHEMA_OUTPUT_LEVEL_DETAILED = 1;
+const int SCHEMA_OUTPUT_LEVEL_BASIC = 2;
+const int SCHEMA_OUTPUT_LEVEL_FLAG = 3;
+
+/// @brief Retrieve the validation result at the desired verbosity level.
+/// @param nVerbosityLevel SCHEMA_OUTPUT_LEVEL_*.
+/// @note Available verbosity levels:
+///     - Verbose (default): Provides validation information in an uncondensed hierarchical
+///         structure that matches the exact structure of the validating schema.
+///     - Detailed: Provides validation information in a condensed hierachical structure based
+///         on the structure of the validating schema.
+///     - Basic: Provides validation information in a flat list structure.
+///     - Flag: Provides a boolean value which simply indicates the overall validation result
+///         with no additional details.
+json GetValidationResult(int nVerbosityLevel = SCHEMA_OUTPUT_LEVEL_VERBOSE);
+
+/// -----------------------------------------------------------------------------------------------
+///                                  PRIVATE FUNCTION PROTOTYPES
+/// -----------------------------------------------------------------------------------------------
+
+/// @warning The recursive nature of this sytem requires that a small number of private functions be
+///     defined.  In normal usage, scripters should never be calling any function that starts with
+///     `schema_*` directly.  Even though these functions will likely appear in the auto-completion
+///     and function listings of various tools, including the toolset's script editor, they should
+///     never be called directly.  All external user interaction with this system should be through
+///     the publicly exposed `Validate*` functions.  System behavior when directly calling internal
+///     functions is UNDEFINED.
+
+json schema_output_GetValidationResult();
+void schema_reference_SaveSchema(json joSchema);
+
+json schema_core_Validate(json jInstance, json joSchema);
+json schema_reference_GetSchema(string sSchemaID);
+json schema_keyword_GetMap(string sSchemaID, json joSchema = JSON_NULL, int bForce = FALSE);
+
+const string SHEMA_VERSION = "0.1.7";
+
 json joScopes = JsonParse(r"{
     ""SCHEMA_SCOPE_CONTEXT"": [],
     ""SCHEMA_SCOPE_DYNAMIC"": [],
@@ -18,14 +88,6 @@ json jaContextKeys = JsonParse(r"[
     ""SCHEMA_CONTEXT_EVALUATED_PROPERTIES"",
     ""SCHEMA_CONTEXT_EVALUATED_ITEMS""
 ]");
-
-int ValidateInstanceAdHoc(json jInstance, json joSchema);
-json schema_output_GetValidationResult();
-void schema_reference_SaveSchema(json joSchema);
-
-json schema_core_Validate(json jInstance, json joSchema);
-json schema_reference_GetSchema(string sSchemaID);
-json schema_keyword_GetMap(string sSchemaID, json joSchema = JSON_NULL, int bForce = FALSE);
 
 /// -----------------------------------------------------------------------------------------------
 ///                                     DEBUGGING FACILITATION
@@ -310,7 +372,7 @@ void schema_core_CreateTables(int bForce = FALSE)
     ";
     schema_core_ExecuteCampaignQuery(s);
 
-    json jaTrustedSchema = schema_core_GetTrustedSchema(TRUE);
+    json jaTrustedSchema = schema_core_GetTrustedSchema();
     int i; for (i = 0; i < JsonGetLength(jaTrustedSchema); i++)
     {
         json joSchema = JsonArrayGet(jaTrustedSchema, i);
@@ -4704,7 +4766,7 @@ json schema_core_Validate(json jInstance, json joSchema)
 ///                                     PUBLIC API
 /// -----------------------------------------------------------------------------------------------
 
-int ValidateSchema(json joSchema)
+int ValidateSchema(json joSchema, int bSaveIfValid = TRUE)
 {
     string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
     if (sSchema == "")
@@ -4718,7 +4780,9 @@ int ValidateSchema(json joSchema)
 
         if (schema_output_GetValid(joResult))
         {
-            schema_reference_SaveSchema(joSchema);
+            if (bSaveIfValid)
+                schema_reference_SaveSchema(joSchema);
+            
             return TRUE;
         }
         else
@@ -4761,4 +4825,28 @@ int ValidateInstanceAdHoc(json jInstance, json joSchema)
     schema_scope_Destroy();
     json joResult = schema_core_Validate(jInstance, joSchema);
     return schema_output_GetValid(joResult);
+}
+
+json GetValidationResult(int nVerbosityLevel = SCHEMA_OUTPUT_LEVEL_VERBOSE)
+{
+    json joOutputUnit = schema_output_GetValidationResult();
+    if (JsonGetType(joOutputUnit) == JSON_TYPE_OBJECT)
+    {
+        switch (nVerbosityLevel)
+        {
+            case SCHEMA_OUTPUT_LEVEL_VERBOSE:
+                return joOutputUnit;
+            case SCHEMA_OUTPUT_LEVEL_DETAILED:
+                return schema_output_Detailed(joOutputUnit);
+            case SCHEMA_OUTPUT_LEVEL_BASIC:
+                return schema_output_Basic(joOutputUnit);
+            case SCHEMA_OUTPUT_LEVEL_FLAG:
+                return schema_output_Flag(joOutputUnit);
+            default:
+                return joOutputUnit;
+        }
+    }
+
+    Error("[SCHEMA::" + __FUNCTION__ + "] Validation result not found");
+    return JsonNull();
 }
