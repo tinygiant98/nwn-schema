@@ -51,6 +51,7 @@ const int SCHEMA_OUTPUT_LEVEL_FLAG = 3;
 ///     - Basic: Provides validation information in a flat list structure.
 ///     - Flag: Provides a boolean value which simply indicates the overall validation result
 ///         with no additional details.
+/// @note Invalid values for nVerbosityLevel will result in default of SCHEMA_OUTPUT_LEVEL_VERBOSE.
 json GetValidationResult(int nVerbosityLevel = SCHEMA_OUTPUT_LEVEL_VERBOSE);
 
 /// -----------------------------------------------------------------------------------------------
