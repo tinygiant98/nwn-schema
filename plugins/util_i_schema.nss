@@ -1,25 +1,8 @@
 
 #include "util_i_debug"
-#include "schema_i_debug"
-
-const int SCHEMA_DRAFT_4 = 1;
-const int SCHEMA_DRAFT_6 = 2;
-const int SCHEMA_DRAFT_7 = 3;
-const int SCHEMA_DRAFT_2019_09 = 4;
-const int SCHEMA_DRAFT_2020_12 = 5;
-const int SCHEMA_DRAFT_LATEST = SCHEMA_DRAFT_2020_12;
-
-/// @note This default metaschema draft will be used anytime a user provide a custom
-///     schema to be validated and has not provided a valid $schema key (either the
-///     key was not included or doesn't exist within the schema database).
-const string SCHEMA_DEFAULT_DRAFT = "https://json-schema.org/draft/2020-12/schema";
-const string SCHEMA_DEFAULT_OUTPUT = "https://json-schema.org/draft/2020-12/output/schema";
-
-const string SCHEMA_DB_SYSTEM = "schema_system";
-
-/// @todo
-///     [ ] debugging stuff, remove if able, or make prettier
-int SOURCE=TRUE;
+#include "util_i_strings"
+#include "util_i_unittest"
+#include "util_c_schema"
 
 json joScopes = JsonParse(r"{
     ""SCHEMA_SCOPE_CONTEXT"": [],
@@ -36,34 +19,189 @@ json jaContextKeys = JsonParse(r"[
     ""SCHEMA_CONTEXT_EVALUATED_ITEMS""
 ]");
 
-/// @todo
-///     [ ] Is there a way to remove these prototypes so they don't show up in the toolset editor?
-///         [ ] schema_reference_ -> schema_core_ ? since it's used in a lot of places?
+int ValidateInstanceAdHoc(json jInstance, json joSchema);
+json schema_output_GetValidationResult();
+void schema_reference_SaveSchema(json joSchema);
+
 json schema_core_Validate(json jInstance, json joSchema);
 json schema_reference_GetSchema(string sSchemaID);
-void schema_reference_RebuildKeymaps();
 json schema_keyword_GetMap(string sSchemaID, json joSchema = JSON_NULL, int bForce = FALSE);
 
-// Forward declarations for utility functions used in reference resolution
-json schema_util_JsonObjectGet(json jObject, string sKey);
-int schema_util_HasKey(json jObject, string sKey);
-int schema_util_RegExpMatch(string sPattern, string sString);
+/// -----------------------------------------------------------------------------------------------
+///                                     DEBUGGING FACILITATION
+/// -----------------------------------------------------------------------------------------------
 
-string schema_reference_MergePath(json jaMatchBase, string sPathRef);
+/// @note Testing and Debugging functions facilitate ensuring the system is running as intended.
+///     Test functions are designed to receive an array of tests (the "test suite") from a source
+///     such as json-schema.org's test suite.  This can be added via scripts or from the specified
+///     text file for quick iteration.  Test Groups (each entry in a test suite array) are run
+///     via DelayCommand() to greatly reduce the chances of encountering a TMI error.
 
-string schema_reference_NormalizePath(string sPath);
+/// @warning Running schema validation with debugging messaging turned on adds a massive amount
+///     of overhead and excessive instruction count.  If debugging messaging is required, limit
+///     the scope of the tests being run to reduce the chances of encountering a TMI error.
+///     If utilizing NWNX:EE, increase the instruction count before executing tests in debugging mode.
 
+/// @brief Verbose schema output generally holds enough information to determine where
+///     an error occurs in a schema or instance.  Setting this value to TRUE will
+///     add the validation source (usually the function name) to each output node.
+/// @note Sources are useful for debugging validation errors, but essentially useless during normal
+///     usages, so this value should normally be set to FALSE.
+const int SCHEMA_OUTPUT_INCLUDE_SOURCE = FALSE;
 
+/// @brief Verbose output nodes can be nested quite deeply and it can be difficult to trace where some
+///     nodes originate.  Set this value to TRUE to invlude a UUID for each node to make tracing
+///     nodes origins easier in some cases.
+const int SCHEMA_OUTPUT_INCLUDE_UUID = FALSE;
+
+void schema_test_RunTestGroup(json joGroup)
+{
+    json joSchema = JsonObjectGet(joGroup, "schema");
+    json jaTests = JsonObjectGet(joGroup, "tests");
+    DescribeTestGroup(JsonGetString(JsonObjectGet(joGroup, "description")));
+    
+    int j; for (; j < JsonGetLength(jaTests); j++)
+    {
+        json joTest = JsonArrayGet(jaTests, j);
+        json jsDescription = JsonObjectGet(joTest, "description");
+        json jInstance = JsonObjectGet(joTest, "data");
+        json jbValid = JsonObjectGet(joTest, "valid");
+        
+        int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
+
+        if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
+        {
+            DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
+            Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
+        }
+    } Outdent();
+}
+
+void schema_test_RunTestSuite(json jaSuite)
+{
+    int i; for (; i < JsonGetLength(jaSuite); i++)
+    {
+        json joGroup = JsonArrayGet(jaSuite, i);
+        DelayCommand(0.0, schema_test_RunTestGroup(joGroup));
+    }
+}
+
+void schema_test_RunTestSuiteFromFile()
+{
+    schema_test_RunTestSuite(JsonParse(ResManGetFileContents("test", RESTYPE_TXT)));
+}
+
+int schema_debug_IsDebugging()
+{
+    return GetLocalInt(GetModule(), "SCHEMA_VALIDATION_DEBUGGING");
+}
+
+void schema_debug_Indent()
+{
+    int n = GetLocalInt(GetModule(), "schema_debug_indent");
+    SetLocalInt(GetModule(), "schema_debug_indent", ++n);
+}
+
+void schema_debug_Outdent()
+{
+    int n = GetLocalInt(GetModule(), "schema_debug_indent");
+    SetLocalInt(GetModule(), "schema_debug_indent", --n);
+}
+
+string schema_debug_GetIndent()
+{
+    int nSpaces = 4;
+    int n = GetLocalInt(GetModule(), "schema_debug_indent");
+
+    string s;
+    int i; for (; i <= n * nSpaces; i++)
+        s+= " ";
+
+    return s;
+}
+
+void schema_debug_Argument(string sFunction, string sArg, json jValue)
+{
+    if (!schema_debug_IsDebugging()) return;
+
+    Debug(schema_debug_GetIndent() + HexColorString(sArg + ": ", COLOR_BLUE_STEEL) + HexColorString(JsonDump(jValue), COLOR_BLUE_LIGHT));
+}
+
+void schema_debug_Message(string sMessage)
+{
+    if (!schema_debug_IsDebugging()) return;
+
+    Debug(schema_debug_GetIndent() + sMessage);
+}
+
+void schema_debug_Value(string sTitle, string sValue)
+{
+    if (!schema_debug_IsDebugging()) return;
+    Debug(schema_debug_GetIndent() + sTitle + " = " + HexColorString(sValue, COLOR_MAGENTA));
+}
+
+void schema_debug_Json(string sTitle, json jValue)
+{
+    if (!schema_debug_IsDebugging()) return;
+    Debug(schema_debug_GetIndent() + sTitle);
+    Debug(HexColorString(JsonDump(jValue, 4), COLOR_SALMON));
+}
+
+void schema_debug_Output(string sTitle, json joOutputUnit, int bID = FALSE)
+{
+    if (!schema_debug_IsDebugging()) return;
+
+    Debug(schema_debug_GetIndent() + "Output validity @ " + sTitle + " = " +
+        HexColorString(JsonObjectGet(joOutputUnit, "valid") == JSON_TRUE ? "TRUE" : "FALSE", COLOR_ORANGE) +
+        (bID ? " for " + HexColorString(JsonDump(JsonObjectGet(joOutputUnit, "uuid")), COLOR_CYAN_DARK) : ""));
+}
+
+void schema_debug_EnterFunction(string sFunction)
+{
+    if (!schema_debug_IsDebugging()) return;
+
+    int n = GetLocalInt(GetModule(), sFunction);
+    SetLocalInt(GetModule(), sFunction, ++n);
+    Debug(schema_debug_GetIndent() + HexColorString("-> " + sFunction, COLOR_GREEN_LIGHT) + " " + HexColorString("(" + IntToString(n) + ")", COLOR_BLUE_LIGHT));
+
+    schema_debug_Indent();
+}
+
+void schema_debug_ExitFunction(string sFunction, string sMessage = "")
+{
+    if (!schema_debug_IsDebugging()) return;
+
+    if (sMessage != "")
+        schema_debug_Message(sMessage);
+
+    schema_debug_Outdent();
+
+    int n = GetLocalInt(GetModule(), sFunction);
+    Debug(schema_debug_GetIndent() + HexColorString("<- " + sFunction, COLOR_RED_LIGHT) + " " + HexColorString("(" + IntToString(n) + ")", COLOR_BLUE_LIGHT));
+    SetLocalInt(GetModule(), sFunction, --n);
+}
+
+/// -----------------------------------------------------------------------------------------------
+///                                         QUERY MANAGEMENT
+/// -----------------------------------------------------------------------------------------------
 
 /// @private Prepare a query for any schema-related database or for module use.
 /// @param s The query string to prepare.
 /// @param bForceModule If TRUE, the query is prepared for the module database.
 sqlquery schema_core_PrepareQuery(string s, int bForceModule = FALSE)
 {
+    json joTables = JsonParse(r"
+        {
+            ""schema_schema"": """ + schema_GetSchemaTableName() + r""",
+            ""schema_output"": """ + schema_GetOutputTableName() + r"""
+        }
+    ");
+    s = SubstituteStrings(s, joTables);
+
     if (bForceModule)
         return SqlPrepareQueryObject(GetModule(), s);
     else
-        return SqlPrepareQueryCampaign(SCHEMA_DB_SYSTEM, s);
+        return SqlPrepareQueryCampaign(schema_GetDatabaseName(), s);
 }
 
 void schema_core_ExecuteQuery(string s, int bForceModule = FALSE)
@@ -101,16 +239,44 @@ void schema_core_CommitTransaction(int bForceModule = FALSE)
     schema_core_ExecuteQuery("COMMIT TRANSACTION;", bForceModule);
 }
 
-void schema_core_CreateTables()
+void schema_core_CreateTables(int bForce = FALSE)
 {
+    /// @note THis function is called automatically to ensure the database tables are initialized
+    ///     without any action required by the user, thus ensuring the database tables are
+    ///     always available to the system.  To prevent execution of a large number of useless,
+    ///     repetitive queries, use a two step process to determine if the tables are loaded:
+    ///     1) Check if the initialization variable has been set on the module (shortcut), or
+    ///     2) Check if the tables already exist in the database (less of a shortcut)
+
+    if (!bForce)
+    {
+        if (GetLocalInt(GetModule(), "SCHEMA_DATABASE_INITIALIZED"))
+            return;
+        else
+        {
+            string s = r"
+                SELECT count(*)
+                FROM sqlite_master 
+                WHERE type = 'table' 
+                    AND name IN ('$schema_schema', '$schema_output');
+            ";
+            sqlquery q = schema_core_PrepareCampaignQuery(s);
+            if (SqlStep(q) && SqlGetInt(q, 0) == 2)
+            {
+                SetLocalInt(GetModule(), "SCHEMA_DATABASE_INITIALIZED", TRUE);
+                return;
+            }
+        }
+    }
+
     schema_core_BeginTransaction(); 
 
-    /// @note `schema_schema` holds all validated schema, including meta schema provided by json-schema.org
+    /// @note This table holds all validated schema, including meta schema provided by json-schema.org
     ///     All user-provided schema will also be saved to this table for retrieval or later use.
     ///     If the UNIQUE key is violated, the record will be removed and replaced (not updated) by
     ///     the incoming schema.
     string s = r"
-        CREATE TABLE IF NOT EXISTS schema_schema (
+        CREATE TABLE IF NOT EXISTS $schema_schema (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             schema TEXT NOT NULL,
             keymap TEXT,
@@ -126,12 +292,35 @@ void schema_core_CreateTables()
             UNIQUE(schema_id) ON CONFLICT REPLACE
         );
     ";
-    schema_core_ExecuteQuery(s);
+    schema_core_ExecuteCampaignQuery(s);
 
     s = r"
-        CREATE INDEX IF NOT EXISTS schema_index ON schema_schema (schema_id);
-    ;";
-    schema_core_ExecuteQuery(s);
+        CREATE INDEX IF NOT EXISTS schema_index ON $schema_schema (schema_id);
+    ";
+    schema_core_ExecuteCampaignQuery(s);
+
+    s = r"
+        CREATE TABLE IF NOT EXISTS $schema_output (
+            verbosity TEXT NOT NULL,
+            schema TEXT NOT NULL,
+            output TEXT NOT NULL DEFAULT '{}',
+            schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$id')) STORED,
+            PRIMARY KEY (verbosity, schema) ON CONFLICT REPLACE
+        );
+    ";
+    schema_core_ExecuteCampaignQuery(s);
+
+    json jaTrustedSchema = schema_core_GetTrustedSchema(TRUE);
+    int i; for (i = 0; i < JsonGetLength(jaTrustedSchema); i++)
+    {
+        json joSchema = JsonArrayGet(jaTrustedSchema, i);
+        json jID = JsonObjectGet(joSchema, "$id");
+        if (JsonGetType(jID) == JSON_TYPE_NULL)
+            jID = JsonObjectGet(joSchema, "id");
+
+        if (JsonGetType(jID) != JSON_TYPE_NULL)
+            schema_reference_SaveSchema(joSchema);
+    }
 
     schema_core_CommitTransaction();
 }
@@ -178,7 +367,7 @@ void schema_scope_Destroy()
 ///     new members are initialized to the default values found in joScopes.
 void schema_scope_ResizeArrays()
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_EnterFunction(__FUNCTION__);
 
     int nRequiredLength = GetLocalInt(GetModule(), "SCHEMA_SCOPE_DEPTH") + 1;
 
@@ -204,7 +393,7 @@ void schema_scope_ResizeArrays()
         SetLocalJson(GetModule(), sScope, joScope);
     }
 
-    //schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Retrieve the current scope depth.
@@ -311,8 +500,8 @@ json schema_scope_GetContext(string sContextKey)
 /// @returns A json array containing the path segments, or an empty json array if the path is empty.
 json schema_scope_DeconstructPointer(string sPointer)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
-    //schema_debug_Argument(__FUNCTION__, "sPointer", JsonString(sPointer));
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sPointer", JsonString(sPointer));
 
     // Remove leading # if present
     if (GetStringLeft(sPointer, 1) == "#")
@@ -320,7 +509,7 @@ json schema_scope_DeconstructPointer(string sPointer)
 
     if (sPointer == "")
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "sPointer is an empty string");
+        schema_debug_ExitFunction(__FUNCTION__, "sPointer is an empty string");
         return JsonArray();
     }
 
@@ -329,7 +518,7 @@ json schema_scope_DeconstructPointer(string sPointer)
         sPointer = GetStringRight(sPointer, GetStringLength(sPointer) - 1);
     else
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "sPointer is not a valid pointer");
+        schema_debug_ExitFunction(__FUNCTION__, "sPointer is not a valid pointer");
         return JsonArray(); // JSON Pointer must start with / if not empty
     }
 
@@ -350,19 +539,20 @@ json schema_scope_DeconstructPointer(string sPointer)
     sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindString(q, ":str", sPointer);
 
-    //schema_debug_ExitFunction(__FUNCTION__);
-    return SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
+    json jaPointer = SqlStep(q) ? SqlGetJson(q, 0) : JsonArray();
+    schema_debug_ExitFunction(__FUNCTION__, JsonDump(jaPointer));
+    return jaPointer;
 }
 
 /// @private Escape a string for use in a JSON pointer (~ -> ~0, / -> ~1)
 string schema_reference_EscapePointer(string sToken)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
-    //schema_debug_Argument(__FUNCTION__, "sToken", JsonString(sToken));
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sToken", JsonString(sToken));
 
     if (sToken == "")
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "sToken is an empty string");
+        schema_debug_ExitFunction(__FUNCTION__, "sToken is an empty string");
         return "";
     }
     
@@ -372,8 +562,9 @@ string schema_reference_EscapePointer(string sToken)
     sqlquery q = schema_core_PrepareModuleQuery(s);
     SqlBindString(q, ":token", sToken);
     
-    //schema_debug_ExitFunction(__FUNCTION__);
-    return SqlStep(q) ? SqlGetString(q, 0) : sToken;
+    sToken = SqlStep(q) ? SqlGetString(q, 0) : sToken;
+    schema_debug_ExitFunction(__FUNCTION__, sToken);
+    return sToken;
 }
 
 /// @private Construct a pointer string from a json array of pointer segments.
@@ -381,11 +572,11 @@ string schema_reference_EscapePointer(string sToken)
 /// @returns A string representing the pointer, or an empty string if the input is null or empty.
 string schema_scope_ConstructPointer(json jaPointer = JSON_NULL)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_EnterFunction(__FUNCTION__);
 
     if (JsonGetType(jaPointer) != JSON_TYPE_ARRAY || JsonGetLength(jaPointer) == 0)
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "jaPointer is not array");
+        schema_debug_ExitFunction(__FUNCTION__, "jaPointer is not array");
         return "";
     }
 
@@ -397,7 +588,7 @@ string schema_scope_ConstructPointer(json jaPointer = JSON_NULL)
         sPath += "/" + schema_reference_EscapePointer(sPart);
     }
     
-    //schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__, sPath);
     return sPath;
 }
 
@@ -810,28 +1001,15 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
         sVerbosity = SCHEMA_OUTPUT_VERBOSE;
 
     if (sSchemaID == "")
-        sSchemaID = SCHEMA_DEFAULT_OUTPUT;
+        sSchemaID = "https://json-schema.org/draft/2020-12/output/schema";
 
-    /// @todo figure out a way to stop calling this all the time, or just set an initialized
-    ///     variable in the function for safety/efficiency.
     schema_core_CreateTables();
 
-    string s = r"
-        CREATE TABLE IF NOT EXISTS schema_output (
-            verbosity TEXT NOT NULL,
-            schema TEXT NOT NULL,
-            output TEXT NOT NULL DEFAULT '{}',
-            schema_id TEXT GENERATED ALWAYS AS (json_extract(schema, '$.$id')) STORED,
-            PRIMARY KEY (verbosity, schema) ON CONFLICT REPLACE
-        );
-    ";
-    schema_core_ExecuteQuery(s);
-
     /// @brief If previously built, the output unit at the desired verbosity level will
-    ///     exist in the schema_output table.
-    s = r"
+    ///     exist in the schema output table.
+    string s = r"
         SELECT output
-        FROM schema_output
+        FROM $schema_output
         WHERE verbosity = :verbosity
             AND schema_id = :schema_id;
     ";
@@ -949,7 +1127,7 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
             return JsonObject();
 
         string s = r"
-            INSERT INTO schema_output (verbosity, schema, output)
+            INSERT INTO $schema_output (verbosity, schema, output)
             VALUES (:verbosity, :schema, :output)
             ON CONFLICT(verbosity, schema) DO UPDATE SET
                 output = :output;
@@ -970,18 +1148,18 @@ json schema_output_GetMinimalObject(string sVerbosity = SCHEMA_OUTPUT_VERBOSE, s
 ///     path from the schema path scope.
 void schema_output_SetKeywordLocation(json joOutputUnit)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_EnterFunction(__FUNCTION__);
     JsonObjectSetInplace(joOutputUnit, "keywordLocation", JsonString(schema_scope_ConstructSchemaPath()));
-    //schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Set the `instanceLocation` value into joOutputUnit by constructing the current instance
 ///     path from the instance path scope.
 void schema_output_SetInstanceLocation(json joOutputUnit)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_EnterFunction(__FUNCTION__);
     JsonObjectSetInplace(joOutputUnit, "instanceLocation", JsonString(schema_scope_ConstructInstancePath()));
-    //schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__);
 }
 
 /// @private Set the `absoluteKeywordLocation` value into joOutputUnit by constructing the current
@@ -1004,12 +1182,8 @@ void schema_output_SetAbsoluteKeywordLocation(json joOutputUnit)
 ///     recognized as boolean for comparison purposes.
 json schema_output_GetOutputUnit(string sSource = "")
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
-    //schema_debug_Argument(__FUNCTION__, "sSource", JsonString(sSource));
-
-    /// @todo
-    ///     [ ] or make it a user configuration (source)
-    ///     [ ] change default boolean to null?
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sSource", JsonString(sSource));
 
     json joOutputUnit = schema_output_GetMinimalObject();
     schema_output_SetKeywordLocation(joOutputUnit);
@@ -1017,7 +1191,7 @@ json schema_output_GetOutputUnit(string sSource = "")
     schema_output_SetAbsoluteKeywordLocation(joOutputUnit);
     schema_output_SetValid(joOutputUnit, TRUE);
 
-    if (SOURCE)
+    if (SCHEMA_OUTPUT_INCLUDE_SOURCE)
     {
         if (sSource == "") 
             JsonObjectSetInplace(joOutputUnit, "source", JsonString("default"));
@@ -1025,10 +1199,10 @@ json schema_output_GetOutputUnit(string sSource = "")
             JsonObjectSetInplace(joOutputUnit, "source", JsonString(" :: " + sSource + " :: "));
     }
 
-    /// @todo temp for testing
-    JsonObjectSetInplace(joOutputUnit, "uuid", JsonString(GetRandomUUID()));
+    if (SCHEMA_OUTPUT_INCLUDE_UUID)
+        JsonObjectSetInplace(joOutputUnit, "uuid", JsonString(GetRandomUUID()));
 
-    //schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__);
     return joOutputUnit;
 }
 
@@ -1046,7 +1220,7 @@ void schema_output_InsertError(json joOutputUnit, json joError, string sSource =
     JsonObjectSetInplace(joOutputUnit, "errors", jaErrors);
     schema_output_SetValid(joOutputUnit, FALSE);
 
-    if (SOURCE && sSource != "")
+    if (SCHEMA_OUTPUT_INCLUDE_SOURCE && sSource != "")
         JsonObjectSetInplace(joOutputUnit, "source", JsonString(sSource));
 
     /// @todo Why is this here and in InsertAnnotation?
@@ -1072,7 +1246,7 @@ void schema_output_InsertAnnotation(json joOutputUnit, json joAnnotation, string
     schema_output_SetValid(joOutputUnit, !bValid);
     SetLocalJson(GetModule(), "SCHEMA_VALIDATION_RESULT", joOutputUnit); 
 
-    if (SOURCE && sSource != "")
+    if (SCHEMA_OUTPUT_INCLUDE_SOURCE && sSource != "")
         JsonObjectSetInplace(joOutputUnit, "source", JsonString(sSource));
 }
 
@@ -1086,7 +1260,7 @@ void schema_output_SetError(json joOutputUnit, string sError, string sSource = "
     schema_output_SetKeywordLocation(joOutputUnit);
     schema_output_SetInstanceLocation(joOutputUnit);
     
-    if (SOURCE && sSource != "")
+    if (SCHEMA_OUTPUT_INCLUDE_SOURCE && sSource != "")
         JsonObjectSetInplace(joOutputUnit, "source", JsonString(sSource));
 
     schema_output_SetValid(joOutputUnit, FALSE);
@@ -1099,7 +1273,7 @@ void schema_output_SetAnnotation(json joOutputUnit, string sKey, json jValue, st
     schema_output_SetKeywordLocation(joOutputUnit);
     schema_output_SetInstanceLocation(joOutputUnit);
 
-    if (SOURCE && sSource != "")
+    if (SCHEMA_OUTPUT_INCLUDE_SOURCE && sSource != "")
         JsonObjectSetInplace(joOutputUnit, "source", JsonString(sSource));
 }
 
@@ -1345,14 +1519,142 @@ json schema_output_Detailed(json joOutputUnit)
     return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
 }
 
+
+
+
+/// @note The following utility functions are meant to replace the nwscript-functions of a similar
+///     name.  These functions allow the use of non-ascii characters within strings and successfully
+///     match, identify, or return the correct non-ascii character interpretation of the string
+///     value.
+
+/// @private Determine if sString matches regex sPattern.
+int schema_validate_RegExpMatch(string sPattern, string sString)
+{
+    string s = r"
+        SELECT 1
+        WHERE
+            CAST(CAST(json_extract(json(:string), '$') AS BLOB) AS TEXT)
+            REGEXP
+            CAST(CAST(json_extract(json(:pattern), '$') AS BLOB) AS TEXT);
+    ";
+    sqlquery q = schema_core_PrepareModuleQuery(s);
+    SqlBindJson(q, ":string", JsonString(sString));
+    SqlBindJson(q, ":pattern", JsonString(sPattern));
+    return SqlStep(q);
+}
+
+/// @private Retrieve the converted value of sKey from jObject.
+json schema_validate_JsonObjectGet(json jObject, string sKey)
+{
+    json jValue = JsonObjectGet(jObject, sKey);
+    if (JsonGetType(jValue) != JSON_TYPE_NULL) return jValue;
+
+    // Use SQLite fallback to handle potential encoding mismatches in keys
+    // We must use json_quote for text values because json_each returns unquoted text,
+    // which SqlGetJson cannot parse as a JSON string.
+    string s = r"
+        SELECT CASE 
+            WHEN type = 'text'
+                THEN json_quote(value)
+                ELSE value
+            END
+        FROM json_each(:obj)
+        WHERE
+            CAST(CAST(key AS BLOB) AS TEXT) = CAST(CAST(json_extract(json(:key), '$') AS BLOB) AS TEXT);
+    ";
+    sqlquery q = schema_core_PrepareModuleQuery(s);
+    SqlBindJson(q, ":obj", jObject);
+    SqlBindJson(q, ":key", JsonString(sKey));
+    
+    return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+}
+
+/// @private Determine if sKey exists in jObject.
+int schema_validate_HasKey(json jObject, string sKey)
+{
+    if (JsonGetType(JsonObjectGet(jObject, sKey)) != JSON_TYPE_NULL) return TRUE;
+
+    string s = r"
+        SELECT 1 FROM json_each(:obj)
+        WHERE CAST(CAST(key AS BLOB) AS TEXT) = CAST(CAST(json_extract(json(:key), '$') AS BLOB) AS TEXT);
+    ";
+    sqlquery q = schema_core_PrepareModuleQuery(s);
+    SqlBindJson(q, ":obj", jObject);
+    SqlBindJson(q, ":key", JsonString(sKey));
+    
+    return SqlStep(q) ? SqlGetInt(q, 0) : FALSE;
+}
+
 /// -----------------------------------------------------------------------------------------------
 ///                                     REFERENCE MANAGEMENT
 /// -----------------------------------------------------------------------------------------------
 /// @brief Schema reference management functions.  These functions provide a method for identifying,
 ///     resolving and utilizing $anchor, $dynamicAnchor, $ref and $dynamicRef keywords.
 
-/// @todo
-///     [ ] Build documentation!
+/// @private Normalize a path by removing dot-segments as per RFC 3986 Section 5.2.4.
+string schema_reference_MergePath(json jaMatchBase, string sPathRef)
+{
+    if (JsonGetString(JsonArrayGet(jaMatchBase, 3)) != "" &&
+        JsonGetString(JsonArrayGet(jaMatchBase, 5)) == "")
+        return "/" + sPathRef;
+    else
+    {
+        string sPathBase = JsonGetString(JsonArrayGet(jaMatchBase, 5));
+        json jaMatch = RegExpMatch("^(.*\\/)", sPathBase);
+        if (JsonGetType(jaMatch) != JSON_TYPE_NULL && jaMatch != JsonArray())
+            return JsonGetString(JsonArrayGet(jaMatch, 1)) + sPathRef;
+        else
+            return sPathRef;
+    }
+}
+
+/// @private Normalize a path that contains empty segments, or hierarchical segments such as
+///     "." and "..".
+/// @param sPath The path to normalize.
+/// @returns A normalized path string with empty segments and hierarchical segments resolved.
+string schema_reference_NormalizePath(string sPath)
+{
+    if (sPath == "") return "";
+
+    int bAbsolute = (GetStringLeft(sPath, 1) == "/");
+    json jaParts = schema_scope_DeconstructPath(sPath);
+    json jaStack = JsonArray();
+    
+    int n = JsonGetLength(jaParts);
+        int i; for (; i < n; i++)
+    {
+        string sPart = JsonGetString(JsonArrayGet(jaParts, i));
+        
+        if (sPart == "" || sPart == ".")
+            continue;
+            
+        if (sPart == "..")
+        {
+            int nStackLen = JsonGetLength(jaStack);
+            if (nStackLen > 0)
+            {
+                string sTop = JsonGetString(JsonArrayGet(jaStack, nStackLen - 1));
+                if (sTop == "..")
+                    JsonArrayInsertInplace(jaStack, JsonString(sTop));
+                else
+                {
+                    // Pop
+                    json jaNew = JsonArray();
+                    int j; for (; j < nStackLen - 1; j++)
+                        JsonArrayInsertInplace(jaNew, JsonArrayGet(jaStack, j));
+                    
+                    jaStack = jaNew;
+                }
+            }
+            else if (!bAbsolute)
+                JsonArrayInsertInplace(jaStack, JsonString(".."));
+        }
+        else
+            JsonArrayInsertInplace(jaStack, JsonString(sPart));
+    }
+    
+    return schema_scope_ConstructPath(jaStack, bAbsolute);
+}
 
 /// @private Resolve a relative URI against a base URI.
 string schema_reference_ResolveURI(string sBaseURI, string sRelativeURI)
@@ -1486,62 +1788,14 @@ string schema_reference_DecodeURI(string sURI)
     return SqlStep(q) ? SqlGetString(q, 0) : sURI;
 }
 
-/// @private Normalize a path that contains empty segments, or hierarchical segments such as
-///     "." and "..".
-/// @param sPath The path to normalize.
-/// @returns A normalized path string with empty segments and hierarchical segments resolved.
-string schema_reference_NormalizePath(string sPath)
-{
-    if (sPath == "") return "";
-
-    int bAbsolute = (GetStringLeft(sPath, 1) == "/");
-    json jaParts = schema_scope_DeconstructPath(sPath);
-    json jaStack = JsonArray();
-    
-    int n = JsonGetLength(jaParts);
-        int i; for (; i < n; i++)
-    {
-        string sPart = JsonGetString(JsonArrayGet(jaParts, i));
-        
-        if (sPart == "" || sPart == ".")
-            continue;
-            
-        if (sPart == "..")
-        {
-            int nStackLen = JsonGetLength(jaStack);
-            if (nStackLen > 0)
-            {
-                string sTop = JsonGetString(JsonArrayGet(jaStack, nStackLen - 1));
-                if (sTop == "..")
-                    JsonArrayInsertInplace(jaStack, JsonString(sTop));
-                else
-                {
-                    // Pop
-                    json jaNew = JsonArray();
-                    int j; for (; j < nStackLen - 1; j++)
-                        JsonArrayInsertInplace(jaNew, JsonArrayGet(jaStack, j));
-                    
-                    jaStack = jaNew;
-                }
-            }
-            else if (!bAbsolute)
-                JsonArrayInsertInplace(jaStack, JsonString(".."));
-        }
-        else
-            JsonArrayInsertInplace(jaStack, JsonString(sPart));
-    }
-    
-    return schema_scope_ConstructPath(jaStack, bAbsolute);
-}
-
 json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
-    //schema_debug_Argument(__FUNCTION__, "sAnchor", JsonString(sAnchor));
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sAnchor", JsonString(sAnchor));
 
     if (JsonGetType(joSchema) != JSON_TYPE_OBJECT || sAnchor == "")
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "instancy type is not object or sAnchor is an empty string");
+        schema_debug_ExitFunction(__FUNCTION__, "instance type is not object or sAnchor is an empty string");
         return JsonNull();
     }
 
@@ -1585,16 +1839,15 @@ json schema_reference_ResolveAnchor(json joSchema, string sAnchor)
     SqlBindString(q, ":anchor", sAnchor);
 
     json jResult = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
-    //schema_debug_Json("Anchor Resolution", jResult);
-    //schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__, JsonDump(jResult));
     return jResult;
 }
 
 json schema_reference_ResolvePointer(json joSchema, string sPointer)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
-    //schema_debug_Argument(__FUNCTION__, "joSchema", joSchema);
-    //schema_debug_Argument(__FUNCTION__, "sPointer", JsonString(sPointer));
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "joSchema", joSchema);
+    schema_debug_Argument(__FUNCTION__, "sPointer", JsonString(sPointer));
 
     if (sPointer == "")
     {
@@ -1605,7 +1858,7 @@ json schema_reference_ResolvePointer(json joSchema, string sPointer)
     // If the pointer is just "/", it resolves to the root
     if (sPointer == "/")
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "sPointer is root");
+        schema_debug_ExitFunction(__FUNCTION__, "sPointer is root");
         return joSchema;
     }
 
@@ -1621,12 +1874,12 @@ json schema_reference_ResolvePointer(json joSchema, string sPointer)
         int nType = JsonGetType(jCurrent);
         if (nType == JSON_TYPE_OBJECT)
         {
-            if (!schema_util_HasKey(jCurrent, sPart))
+            if (!schema_validate_HasKey(jCurrent, sPart))
             {
-                //schema_debug_ExitFunction(__FUNCTION__, "schema does not have desired key");
+                schema_debug_ExitFunction(__FUNCTION__, "schema does not have desired key");
                 return JsonNull();
             }
-            jCurrent = schema_util_JsonObjectGet(jCurrent, sPart);
+            jCurrent = schema_validate_JsonObjectGet(jCurrent, sPart);
         }
         else if (nType == JSON_TYPE_ARRAY)
         {
@@ -1634,19 +1887,19 @@ json schema_reference_ResolvePointer(json joSchema, string sPointer)
             // Check if sPart is a valid integer string and within bounds
             if (IntToString(nIndex) != sPart || nIndex < 0 || nIndex >= JsonGetLength(jCurrent))
             {
-                //schema_debug_ExitFunction(__FUNCTION__, "sPart is not a valid integer string within bounds");
+                schema_debug_ExitFunction(__FUNCTION__, "sPart is not a valid integer string within bounds");
                 return JsonNull();
             }
             jCurrent = JsonArrayGet(jCurrent, nIndex);
         }
         else
         {
-            //schema_debug_ExitFunction(__FUNCTION__, "nType is not valid; returning null");
+            schema_debug_ExitFunction(__FUNCTION__, "nType is not valid; returning null");
             return JsonNull();
         }
     }
 
-    //schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__, JsonDump(jCurrent));
     return jCurrent;
 }
 
@@ -1661,7 +1914,7 @@ void schema_reference_DeleteSchema(string sID)
     schema_core_CreateTables();
 
     string s = r"
-        DELETE FROM schema_schema
+        DELETE FROM $schema_schema
         WHERE schema_id = :schema_id;
     ";
     sqlquery q = schema_core_PrepareCampaignQuery(s);
@@ -1691,7 +1944,7 @@ void schema_reference_SaveSchema(json joSchema)
     json jaKeyMap = schema_keyword_GetMap(sID, joSchema, TRUE);
 
     string s = r"
-        INSERT INTO schema_schema (schema, keymap)
+        INSERT INTO $schema_schema (schema, keymap)
         VALUES (:schema, :keymap);
     ";
     sqlquery q = schema_core_PrepareCampaignQuery(s);
@@ -1706,25 +1959,23 @@ void schema_reference_RebuildKeymaps()
 {
     schema_core_CreateTables();
 
-    string s = "SELECT json_group_array(schema_id) FROM schema_schema";
+    string s = r"
+        SELECT json_group_array(schema_id) FROM $schema_schema;
+    ";
     sqlquery q = schema_core_PrepareCampaignQuery(s);
-    
-    if (!SqlStep(q))
+    json jaIDs = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
+
+    if (JsonGetType(jaIDs) != JSON_TYPE_ARRAY)
         return;
 
-    json jaIDs = SqlGetJson(q, 0);
-
-    int i;
-    for (i = 0; i < JsonGetLength(jaIDs); i++) 
+    int i; for (; i < JsonGetLength(jaIDs); i++) 
     {
         string sID = JsonGetString(JsonArrayGet(jaIDs, i));
-
-        // Force regeneration of keymap
-        // We pass JSON_NULL for the schema, which forces schema_keyword_GetMap to retrieve it from the DB
         json jaKeyMap = schema_keyword_GetMap(sID, JSON_NULL, TRUE);
 
-        // Update database
-        s = "UPDATE schema_schema SET keymap = :keymap WHERE schema_id = :id";
+        s = r"
+            UPDATE $schema_schema SET keymap = :keymap WHERE schema_id = :id
+        ";
         q = schema_core_PrepareCampaignQuery(s);
         SqlBindJson(q, ":keymap", jaKeyMap);
         SqlBindString(q, ":id", sID);
@@ -1732,17 +1983,11 @@ void schema_reference_RebuildKeymaps()
     }
 }
 
-/// @todo
-///     [ ] Track where these JsonNull() get returns and figure out what to do with them.
-///     [ ] Need better error handling/messaging here.  Structured logging?
-///     [ ] Rework a bit to find the answers the right way and push urn:nwn:xxxx methodology
-
 json schema_reference_GetSchema(string sSchemaID)
 {
     if (sSchemaID == "")
         return JsonNull();
 
-    // Check the current document's ID map first
     json joIDMap = GetLocalJson(GetModule(), "SCHEMA_SCOPE_IDMAP");
     if (JsonGetType(joIDMap) == JSON_TYPE_OBJECT)
     {
@@ -1755,7 +2000,7 @@ json schema_reference_GetSchema(string sSchemaID)
 
     string s = r"
         SELECT schema 
-        FROM schema_schema
+        FROM $schema_schema
         WHERE schema_id = :id
             OR schema_id = :id || '#';
     ";
@@ -1765,50 +2010,6 @@ json schema_reference_GetSchema(string sSchemaID)
     json joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
     if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
         return joSchema;
-
-    /// @note Attempt to retrieve the schema from the admin table.
-    /// @todo what about resetting the query instead?
-    q = schema_core_PrepareCampaignQuery(s);
-    SqlBindString(q, ":id", sSchemaID);
-
-    joSchema = SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
-    if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
-        return joSchema;
-
-    /// @note Attempt to retrieve the schema from a ResMan file.
-    if (GetStringLength(sSchemaID) <= 16 && ResManGetAliasFor(sSchemaID, RESTYPE_TXT) != "")
-    {
-        joSchema = JsonParse(ResManGetFileContents(sSchemaID, RESTYPE_TXT));
-        if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
-        {
-            /// @note File-sourced schema are not trusted, so validation must
-            ///     be performed before saving the schema to the database.
-            string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
-            if (sSchema == "")
-                sSchema = SCHEMA_DEFAULT_DRAFT;
-
-            json joMeta = schema_reference_GetSchema(sSchema);
-            if (JsonGetType(joMeta) == JSON_TYPE_NULL && sSchema != SCHEMA_DEFAULT_DRAFT)
-                joMeta = schema_reference_GetSchema(SCHEMA_DEFAULT_DRAFT);
-
-            if (JsonGetType(joMeta) == JSON_TYPE_NULL)
-                return JsonNull();
-            else
-            {
-                schema_scope_IncrementDepth();
-                json joResult = schema_core_Validate(joSchema, joMeta);
-                schema_scope_DecrementDepth();
-
-                if (schema_output_GetValid(joResult))
-                {
-                    schema_reference_SaveSchema(joSchema);
-                    return joSchema;
-                }
-                else
-                    return JsonNull();
-            }
-        }
-    }
 
     return JsonNull();
 }
@@ -1820,43 +2021,26 @@ json schema_reference_GetSchema(string sSchemaID)
 ///     could not be resolved.
 json schema_reference_ResolveFragment(json joSchema, string sFragment)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_EnterFunction(__FUNCTION__);
 
     sFragment = schema_reference_DecodeURI(sFragment);
 
     if (GetStringLeft(sFragment, 1) == "/")
     {
         json jResult = schema_reference_ResolvePointer(joSchema, sFragment);
-        //schema_debug_ExitFunction(__FUNCTION__, "sFragment is a pointer");
+        schema_debug_ExitFunction(__FUNCTION__, "sFragment is a pointer");
         return jResult;
     }
     else if (sFragment == "")
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "sFragment is empty");
+        schema_debug_ExitFunction(__FUNCTION__, "sFragment is empty");
         return joSchema;
     }
     else
     {
         json joAnchor = schema_reference_ResolveAnchor(joSchema, sFragment);
-        
-        //schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, JsonDump(joAnchor));
         return joAnchor;
-    }
-}
-
-string schema_reference_MergePath(json jaMatchBase, string sPathRef)
-{
-    if (JsonGetString(JsonArrayGet(jaMatchBase, 3)) != "" &&
-        JsonGetString(JsonArrayGet(jaMatchBase, 5)) == "")
-        return "/" + sPathRef;
-    else
-    {
-        string sPathBase = JsonGetString(JsonArrayGet(jaMatchBase, 5));
-        json jaMatch = RegExpMatch("^(.*\\/)", sPathBase);
-        if (JsonGetType(jaMatch) != JSON_TYPE_NULL && jaMatch != JsonArray())
-            return JsonGetString(JsonArrayGet(jaMatch, 1)) + sPathRef;
-        else
-            return sPathRef;
     }
 }
 
@@ -2082,7 +2266,14 @@ json schema_reference_ResolveRecursiveRef(json joSchema)
     return joTarget;
 }
 
-/// @private Recursive helper to collect keywords.
+/// -----------------------------------------------------------------------------------------------
+///                                     KEYWORD MANAGEMENT
+/// -----------------------------------------------------------------------------------------------
+
+/// @private Recursive helper to collect keywords during the schema save process.
+/// @note Keywords are collected from the members of the `properties` object of
+///     the subject schema as well as the `properties` objects of any schema found
+///     in the subject schema's `allOf` value.
 json schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json jaKeywords, json joVocabulary)
 {
     schema_debug_EnterFunction(__FUNCTION__);
@@ -2090,13 +2281,10 @@ json schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json ja
     schema_debug_Argument(__FUNCTION__, "jaSeen", jaSeen);
     schema_debug_Argument(__FUNCTION__, "jaKeywords", jaKeywords);
 
-    // Allow the current object to define/override the vocabulary
     json joLocalVocabulary = JsonObjectGet(joSchema, "$vocabulary");
     if (JsonGetType(joLocalVocabulary) == JSON_TYPE_OBJECT)
         joVocabulary = joLocalVocabulary;
 
-    // 1. Properties
-    // Use SQLite to extract keys efficiently and add them to our array
     string s = r"
         SELECT json_group_array(DISTINCT value)
         FROM (
@@ -2113,7 +2301,6 @@ json schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json ja
     if (SqlStep(q))
         jaKeywords = SqlGetJson(q, 0);
 
-    // 2. allOf
     json jaAllOf = JsonObjectGet(joSchema, "allOf");
     if (JsonGetType(jaAllOf) == JSON_TYPE_ARRAY)
     {
@@ -2138,7 +2325,6 @@ json schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json ja
                         if (sTargetID == "") sTargetID = JsonGetString(JsonObjectGet(joTarget, "id"));
                         if (sTargetID == "") sTargetID = sResolvedURI;
                         
-                        // Check definitive ID against vocabulary
                         if (sTargetID != sResolvedURI && JsonGetType(joVocabulary) == JSON_TYPE_OBJECT)
                         {
                             json jVocab = JsonObjectGet(joVocabulary, sTargetID);
@@ -2155,12 +2341,15 @@ json schema_keyword_Collect(json joSchema, string sBaseURI, json jaSeen, json ja
         }
     }
 
-    schema_debug_ExitFunction(__FUNCTION__);
+    schema_debug_ExitFunction(__FUNCTION__, IntToString(JsonGetLength(jaKeywords)) + " keyword(s) collected");
     return jaKeywords;
 }
 
-/// @brief Determine its full keyword map... including keys from its own properties key
-///     as well as those from all resolved references (or any other allowabled schema) within allOF.
+/// @private Retrieve or createaa keymap for the specified schema.
+/// @note Keymaps are used as a shortcut to determine keyword applicability to any schema.
+///     If the schema is saved to the databsae, the keymap is also saved.  Though rarely
+///     needed, keymaps can be refreshed by reloading the schema.
+/// @see schema_reference_RebuildKeymaps().
 json schema_keyword_GetMap(string sSchemaID, json joSchema = JSON_NULL, int bForce = FALSE)
 {
     schema_debug_EnterFunction(__FUNCTION__);
@@ -2173,7 +2362,7 @@ json schema_keyword_GetMap(string sSchemaID, json joSchema = JSON_NULL, int bFor
     {
         string s = r"
             SELECT keymap
-            FROM schema_schema
+            FROM $schema_schema
             WHERE schema_id = :id;
         ";
         sqlquery q = schema_core_PrepareCampaignQuery(s);
@@ -2215,25 +2404,26 @@ json schema_keyword_GetMap(string sSchemaID, json joSchema = JSON_NULL, int bFor
 /// @returns TRUE if the keyword is active (found in the keymap), FALSE otherwise.
 int schema_keyword_IsActive(string sKeyword)
 {
-    //schema_debug_EnterFunction(__FUNCTION__);
-    //schema_debug_Argument(__FUNCTION__, "sKeyword", JsonString(sKeyword));
+    schema_debug_EnterFunction(__FUNCTION__);
+    schema_debug_Argument(__FUNCTION__, "sKeyword", JsonString(sKeyword));
 
     json jaMapStack = schema_scope_GetKeymap();
     if (JsonGetType(jaMapStack) != JSON_TYPE_ARRAY || JsonGetLength(jaMapStack) == 0)
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "keymap does not exist");
+        schema_debug_ExitFunction(__FUNCTION__, "keymap does not exist");
         return FALSE;
     }
 
     json jaKeyMap = JsonArrayGet(jaMapStack, JsonGetLength(jaMapStack) - 1);
     if (JsonGetType(jaKeyMap) != JSON_TYPE_ARRAY)
     {
-        //schema_debug_ExitFunction(__FUNCTION__, "keymap is not array");
+        schema_debug_ExitFunction(__FUNCTION__, "keymap is not array");
         return FALSE;
     }
     
-    //schema_debug_ExitFunction(__FUNCTION__);
-    return JsonFind(jaKeyMap, JsonString(sKeyword)) != JsonNull();
+    int bFound = JsonFind(jaKeyMap, JsonString(sKeyword)) != JsonNull();
+    schema_debug_ExitFunction(__FUNCTION__, sKeyword + " is" + (bFound ? "" : " not") + " active");
+    return bFound;
 }
 
 int schema_keyword_IsLegacy()
@@ -2265,69 +2455,6 @@ int schema_keyword_GetDraft()
 /// -----------------------------------------------------------------------------------------------
 ///                                     KEYWORD VALIDATION
 /// -----------------------------------------------------------------------------------------------
-
-/// @note The following utility procedures are meant to replace the nwscript-functions of a similar
-///     name.  These functions allow the use of non-ascii characters within strings and successfully
-///     match, identify, or return the correct non-ascii character interpretation of the string
-///     value.
-
-/// @private Determine if sString matches regex sPattern.
-int schema_util_RegExpMatch(string sPattern, string sString)
-{
-    string s = r"
-        SELECT 1
-        WHERE
-            CAST(CAST(json_extract(json(:string), '$') AS BLOB) AS TEXT)
-            REGEXP
-            CAST(CAST(json_extract(json(:pattern), '$') AS BLOB) AS TEXT);
-    ";
-    sqlquery q = schema_core_PrepareModuleQuery(s);
-    SqlBindJson(q, ":string", JsonString(sString));
-    SqlBindJson(q, ":pattern", JsonString(sPattern));
-    return SqlStep(q);
-}
-
-/// @private Retrieve the converted value of sKey from jObject.
-json schema_util_JsonObjectGet(json jObject, string sKey)
-{
-    json jValue = JsonObjectGet(jObject, sKey);
-    if (JsonGetType(jValue) != JSON_TYPE_NULL) return jValue;
-
-    // Use SQLite fallback to handle potential encoding mismatches in keys
-    // We must use json_quote for text values because json_each returns unquoted text,
-    // which SqlGetJson cannot parse as a JSON string.
-    string s = r"
-        SELECT CASE 
-            WHEN type = 'text'
-                THEN json_quote(value)
-                ELSE value
-            END
-        FROM json_each(:obj)
-        WHERE
-            CAST(CAST(key AS BLOB) AS TEXT) = CAST(CAST(json_extract(json(:key), '$') AS BLOB) AS TEXT);
-    ";
-    sqlquery q = schema_core_PrepareModuleQuery(s);
-    SqlBindJson(q, ":obj", jObject);
-    SqlBindJson(q, ":key", JsonString(sKey));
-    
-    return SqlStep(q) ? SqlGetJson(q, 0) : JsonNull();
-}
-
-/// @private Determine if sKey exists in jObject.
-int schema_util_HasKey(json jObject, string sKey)
-{
-    if (JsonGetType(JsonObjectGet(jObject, sKey)) != JSON_TYPE_NULL) return TRUE;
-
-    string s = r"
-        SELECT 1 FROM json_each(:obj)
-        WHERE CAST(CAST(key AS BLOB) AS TEXT) = CAST(CAST(json_extract(json(:key), '$') AS BLOB) AS TEXT);
-    ";
-    sqlquery q = schema_core_PrepareModuleQuery(s);
-    SqlBindJson(q, ":obj", jObject);
-    SqlBindJson(q, ":key", JsonString(sKey));
-    
-    return SqlStep(q) ? SqlGetInt(q, 0) : FALSE;
-}
 
 /// @private `type`.  The value of `type` must be either a string or an array of unique strings.  String values
 ///     must be one of the primitive types (null, boolean, object, array, number, string or integer).  The
@@ -2493,7 +2620,7 @@ json schema_validate_Pattern(json jsInstance, json jSchema)
         return joOutputUnit;
     }
 
-    if (!schema_util_RegExpMatch(JsonGetString(jSchema), JsonGetString(jsInstance)))
+    if (!schema_validate_RegExpMatch(JsonGetString(jSchema), JsonGetString(jsInstance)))
         schema_output_SetError(joOutputUnit, schema_output_GetErrorMessage(sKeyword), sSource);
 
     schema_debug_ExitFunction(__FUNCTION__);
@@ -2525,7 +2652,7 @@ json schema_validate_Format(json jsInstance, json jSchema)
 
     if (sFormat == "email")    
     {
-        bValid = schema_util_RegExpMatch("^[a-zA-Z0-9!#$%&'*+\\-/=?^_`{|}~]+(?:\\.[a-zA-Z0-9!#$%&'*+\\-/=?^_`{|}~]+)*@(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$", sInstance);
+        bValid = schema_validate_RegExpMatch("^[a-zA-Z0-9!#$%&'*+\\-/=?^_`{|}~]+(?:\\.[a-zA-Z0-9!#$%&'*+\\-/=?^_`{|}~]+)*@(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$", sInstance);
     }
     else if (sFormat == "hostname")
     {
@@ -2573,68 +2700,68 @@ json schema_validate_Format(json jsInstance, json jSchema)
     }
     else if (sFormat == "ipv4")
     {
-        bValid = schema_util_RegExpMatch("^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
+        bValid = schema_validate_RegExpMatch("^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
                            + "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
                            + "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\."
                            + "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$", sInstance);
     }
     else if (sFormat == "ipv6")
     {
-        bValid = schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$", sInstance)
-              || schema_util_RegExpMatch("^::([0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}$", sInstance)
-              || schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){1,7}:$", sInstance)
-              || schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){1}(:[0-9A-Fa-f]{1,4}){1,6}$", sInstance)
-              || schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){2}(:[0-9A-Fa-f]{1,4}){1,5}$", sInstance)
-              || schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){3}(:[0-9A-Fa-f]{1,4}){1,4}$", sInstance)
-              || schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){4}(:[0-9A-Fa-f]{1,4}){1,3}$", sInstance)
-              || schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){5}(:[0-9A-Fa-f]{1,4}){1,2}$", sInstance)
-              || schema_util_RegExpMatch("^([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}){1}$", sInstance);
+        bValid = schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}$", sInstance)
+              || schema_validate_RegExpMatch("^::([0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}$", sInstance)
+              || schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){1,7}:$", sInstance)
+              || schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){1}(:[0-9A-Fa-f]{1,4}){1,6}$", sInstance)
+              || schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){2}(:[0-9A-Fa-f]{1,4}){1,5}$", sInstance)
+              || schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){3}(:[0-9A-Fa-f]{1,4}){1,4}$", sInstance)
+              || schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){4}(:[0-9A-Fa-f]{1,4}){1,3}$", sInstance)
+              || schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){5}(:[0-9A-Fa-f]{1,4}){1,2}$", sInstance)
+              || schema_validate_RegExpMatch("^([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}){1}$", sInstance);
     }
     else if (sFormat == "uri")
     {
-        bValid = schema_util_RegExpMatch("^[a-zA-Z][a-zA-Z0-9+.-]*:[^\\s]*$", sInstance);
+        bValid = schema_validate_RegExpMatch("^[a-zA-Z][a-zA-Z0-9+.-]*:[^\\s]*$", sInstance);
     }
     else if (sFormat == "uri-reference")
     {
-        bValid = (sInstance == "") || schema_util_RegExpMatch("^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?$", sInstance);
+        bValid = (sInstance == "") || schema_validate_RegExpMatch("^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?$", sInstance);
     }
     else if (sFormat == "iri")
     {
-        bValid = schema_util_RegExpMatch("^[\\w\\d\\-._~:/?#\\[\\]@!$&'()*+,;=%]+$", sInstance);
+        bValid = schema_validate_RegExpMatch("^[\\w\\d\\-._~:/?#\\[\\]@!$&'()*+,;=%]+$", sInstance);
     }
     else if (sFormat == "iri-reference")
     {
         bValid = (sInstance == "")
-              || schema_util_RegExpMatch("^[\\w\\d\\-._~:/?#\\[\\]@!$&'()*+,;=%]+$", sInstance)
-              || schema_util_RegExpMatch("^[/?#]", sInstance);
+              || schema_validate_RegExpMatch("^[\\w\\d\\-._~:/?#\\[\\]@!$&'()*+,;=%]+$", sInstance)
+              || schema_validate_RegExpMatch("^[/?#]", sInstance);
     }
     else if (sFormat == "date")
     {
-        bValid = schema_util_RegExpMatch("^\\d{4}-((0[1-9])|(1[0-2]))-((0[1-9])|([12][0-9])|(3[01]))$", sInstance);
+        bValid = schema_validate_RegExpMatch("^\\d{4}-((0[1-9])|(1[0-2]))-((0[1-9])|([12][0-9])|(3[01]))$", sInstance);
     }
     else if (sFormat == "date-time")
     {
-        bValid = schema_util_RegExpMatch("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$", sInstance);
+        bValid = schema_validate_RegExpMatch("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$", sInstance);
     }
     else if (sFormat == "time")
     {
-        bValid = schema_util_RegExpMatch("^\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?$", sInstance);
+        bValid = schema_validate_RegExpMatch("^\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?$", sInstance);
     }
     else if (sFormat == "duration")
     {
-        bValid = schema_util_RegExpMatch("^P(?!$)(\\d+Y)?(\\d+M)?(\\d+D)?(T(?!$)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$", sInstance);
+        bValid = schema_validate_RegExpMatch("^P(?!$)(\\d+Y)?(\\d+M)?(\\d+D)?(T(?!$)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$", sInstance);
     }
     else if (sFormat == "json-pointer")
     {
-        bValid = (sInstance == "") || schema_util_RegExpMatch("^(/([^/~]|~[01])*)*$", sInstance);
+        bValid = (sInstance == "") || schema_validate_RegExpMatch("^(/([^/~]|~[01])*)*$", sInstance);
     }
     else if (sFormat == "relative-json-pointer")
     {
-        bValid = schema_util_RegExpMatch("^(0|[1-9][0-9]*)(#|(/([^/~]|~[01])*)*)$", sInstance);
+        bValid = schema_validate_RegExpMatch("^(0|[1-9][0-9]*)(#|(/([^/~]|~[01])*)*)$", sInstance);
     }
     else if (sFormat == "uuid")
     {
-        bValid = schema_util_RegExpMatch("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$", sInstance);
+        bValid = schema_validate_RegExpMatch("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$", sInstance);
     }
     else if (sFormat == "regex")
     {
@@ -2642,7 +2769,7 @@ json schema_validate_Format(json jsInstance, json jSchema)
         
         if (bValid)
         {
-            bValid = schema_util_RegExpMatch("^[^\\\\]*(\\\\.[^\\\\]*)*$", sInstance);
+            bValid = schema_validate_RegExpMatch("^[^\\\\]*(\\\\.[^\\\\]*)*$", sInstance);
         }
     }
     else
@@ -2651,7 +2778,6 @@ json schema_validate_Format(json jsInstance, json jSchema)
         return joOutputUnit;
     }
 
-    schema_debug_ExitFunction(__FUNCTION__);
     if (bValid)
         schema_output_SetAnnotation(joOutputUnit, "format", jSchema);
     else
@@ -2660,6 +2786,7 @@ json schema_validate_Format(json jsInstance, json jSchema)
         schema_output_SetError(joOutputUnit, "instance does not match format: " + sFormat);
     }
 
+    schema_debug_ExitFunction(__FUNCTION__);
     return joOutputUnit;
 }
 
@@ -3181,7 +3308,7 @@ json schema_validate_Required(json joInstance, json jSchema)
     int i; for (; i < JsonGetLength(jSchema); i++)
     {
         json jProperty = JsonArrayGet(jSchema, i);
-        if (!schema_util_HasKey(joInstance, JsonGetString(jProperty)))
+        if (!schema_validate_HasKey(joInstance, JsonGetString(jProperty)))
             jaMissingProperties = JsonArrayInsert(jaMissingProperties, jProperty);
     }
 
@@ -3215,7 +3342,7 @@ json schema_validate_DependentRequired(json joInstance, json jSchema)
         json jProperty = JsonArrayGet(jaSchemaKeys, i);
 
         // Check if the property exists in the instance (robustly)
-        if (schema_util_HasKey(joInstance, JsonGetString(jProperty)))
+        if (schema_validate_HasKey(joInstance, JsonGetString(jProperty)))
         {
             json jaRequired = JsonObjectGet(jSchema, JsonGetString(jProperty));
             json jaMissing = JsonArray();
@@ -3224,7 +3351,7 @@ json schema_validate_DependentRequired(json joInstance, json jSchema)
             {
                 json jRequiredKey = JsonArrayGet(jaRequired, j);
                 // Check if the required dependency exists in the instance (robustly)
-                if (!schema_util_HasKey(joInstance, JsonGetString(jRequiredKey)))
+                if (!schema_validate_HasKey(joInstance, JsonGetString(jRequiredKey)))
                     JsonArrayInsertInplace(jaMissing, jRequiredKey);
             }
 
@@ -3347,12 +3474,12 @@ json schema_validate_Object(
                 string sInstanceKey = JsonGetString(JsonArrayGet(jaInstanceKeys, i));
                 schema_scope_PushInstancePath(sInstanceKey);
 
-                json joPropertySchema = schema_util_JsonObjectGet(joProperties, sInstanceKey);
+                json joPropertySchema = schema_validate_JsonObjectGet(joProperties, sInstanceKey);
                 if (JsonGetType(joPropertySchema) != JSON_TYPE_NULL)
                 {
                     schema_scope_PushSchemaPath(sInstanceKey);
 
-                    json joResult = schema_core_Validate(schema_util_JsonObjectGet(joInstance, sInstanceKey), joPropertySchema);
+                    json joResult = schema_core_Validate(schema_validate_JsonObjectGet(joInstance, sInstanceKey), joPropertySchema);
                     schema_output_InsertResult(joOutputUnit, joResult, sSource);                
 
                     if (bAnnotate)
@@ -3406,12 +3533,12 @@ json schema_validate_Object(
                     string sPattern = JsonGetString(JsonArrayGet(jaPatternKeys, j));
                     schema_scope_PushSchemaPath(sPattern);
 
-                    if (schema_util_RegExpMatch(sPattern, sInstanceKey))
+                    if (schema_validate_RegExpMatch(sPattern, sInstanceKey))
                     {
-                        json joPatternSchema = schema_util_JsonObjectGet(joPatternProperties, sPattern);
+                        json joPatternSchema = schema_validate_JsonObjectGet(joPatternProperties, sPattern);
                         if (JsonGetType(joPatternSchema) != JSON_TYPE_NULL)
                         {
-                            json joResult = schema_core_Validate(schema_util_JsonObjectGet(joInstance, sInstanceKey), joPatternSchema);
+                            json joResult = schema_core_Validate(schema_validate_JsonObjectGet(joInstance, sInstanceKey), joPatternSchema);
                             schema_output_InsertResult(joOutputUnit, joResult, sSource);
 
                             if (bAnnotate)
@@ -3476,7 +3603,7 @@ json schema_validate_Object(
                 string sUnevaluatedKey = JsonGetString(JsonArrayGet(jaUnevaluatedProperties, i));
                 schema_scope_PushInstancePath(sUnevaluatedKey);
 
-                json joInstanceChild = schema_util_JsonObjectGet(joInstance, sUnevaluatedKey);
+                json joInstanceChild = schema_validate_JsonObjectGet(joInstance, sUnevaluatedKey);
                 if (JsonGetType(joInstanceChild) != JSON_TYPE_NULL)
                 {
                     json joResult = schema_core_Validate(joInstanceChild, jAdditionalProperties);
@@ -3538,7 +3665,7 @@ json schema_validate_Object(
                 string sSchemaKey = JsonGetString(JsonArrayGet(jaSchemaKeys, i));
                 schema_scope_PushSchemaPath(sSchemaKey);
 
-                if (schema_util_HasKey(joInstance, sSchemaKey))
+                if (schema_validate_HasKey(joInstance, sSchemaKey))
                 {
                     json joSchema = JsonObjectGet(jSchema, sSchemaKey);
                     int nSchemaType = JsonGetType(joSchema);
@@ -3673,7 +3800,7 @@ void schema_validate_Unevaluated(json jInstance, json joSchema, json joOutputUni
                             if (nInstanceType == JSON_TYPE_ARRAY)
                                 jChild = JsonArrayGet(jInstance, JsonGetInt(jUnevaluatedKey));
                             else if (nInstanceType == JSON_TYPE_OBJECT)
-                                jChild = schema_util_JsonObjectGet(jInstance, sUnevaluatedKey);
+                                jChild = schema_validate_JsonObjectGet(jInstance, sUnevaluatedKey);
 
                             json joResult = schema_core_Validate(jChild, jKeywordSchema);
                             schema_output_InsertResult(joOutput, joResult, sSource);
@@ -4012,7 +4139,6 @@ json schema_validate_Metadata(string sKey, json jValue)
 json schema_core_Validate(json jInstance, json joSchema)
 {
     schema_debug_EnterFunction(__FUNCTION__);
-
     schema_debug_Argument(__FUNCTION__, "instance", jInstance);
     schema_debug_Argument(__FUNCTION__, "schema", joSchema);
 
@@ -4022,8 +4148,8 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     if (JsonGetType(joSchema) == JSON_TYPE_NULL)
     {
-        schema_output_SetError(joOutputUnit, "Schema resolution failed (JsonNull)", __FUNCTION__);
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_output_SetError(joOutputUnit, "schema is null", __FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "schema is null");
         schema_output_SetValid(joOutputUnit, FALSE);
         schema_output_SaveValidationResult(joOutputUnit);
         return joOutputUnit;
@@ -4032,14 +4158,14 @@ json schema_core_Validate(json jInstance, json joSchema)
     json jResult = JsonNull();
     if (joSchema == JSON_TRUE || joSchema == JsonObject())
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "schema is true");
         schema_output_SetValid(joOutputUnit, TRUE);
         schema_output_SaveValidationResult(joOutputUnit);
         return joOutputUnit;
     }
     if (joSchema == JSON_FALSE)
     {
-        schema_debug_ExitFunction(__FUNCTION__);
+        schema_debug_ExitFunction(__FUNCTION__, "schema is false");
         schema_output_SetValid(joOutputUnit, FALSE);
         schema_output_SaveValidationResult(joOutputUnit);
         return joOutputUnit;
@@ -4047,12 +4173,6 @@ json schema_core_Validate(json jInstance, json joSchema)
 
     json jaSchemaKeys = JsonObjectKeys(joSchema);
     
-    /// @todo
-    ///     [ ] move this to a PrepareEnvironment function
-
-    /// @todo
-    ///     only load the keyword map if this is the base-level of a schema validation, not
-    ///     every time we come through here since this is super-recursive.
     /// @brief Keep track of the current schema.  $schema should only be present in the root note
     ///     of any schema, so if it's present, assume that we're starting a new validation.
     int nLexicalScopes = 0;
@@ -4074,8 +4194,6 @@ json schema_core_Validate(json jInstance, json joSchema)
         // If it DOES NOT have $id, but has $schema (root), we must push it.
         
         string sRootID = JsonGetString(JsonObjectGet(joSchema, "$id"));
-
-        //schema_debug_Value("sSchema", sSchema);
         if (sRootID == "")
             sRootID = JsonGetString(JsonObjectGet(joSchema, "id"));
 
@@ -4146,10 +4264,6 @@ json schema_core_Validate(json jInstance, json joSchema)
         bDynamicAnchor = TRUE;
     }
 
-    /// @todo
-    ///     [ ] These resolution functions can and will return JsonNull().  Check for that before
-    ///         invoking another validation process.
-    
     /// @brief Resolve references, dynamic references and recursive references.  Dynamic and recursive
     ///     references take advantage of dynamic scope to find the appropriate anchor/subschema.  If
     ///     dynamic or recursive references cannot be resolved for any reason, they revert to resolving
@@ -4505,7 +4619,7 @@ json schema_core_Validate(json jInstance, json joSchema)
         {
             /// @note Array results are returned from compound validation functions.  For classification
             ///     purposes, the entire result set is either an annotation or an error, regardless of
-            ///     the mix.  A single error results in the entire set being classified as an error array.
+            ///     the mix.
             int nResultLength = JsonGetLength(jResult);
             int i; for (; i < nResultLength; i++)
             {
@@ -4513,31 +4627,23 @@ json schema_core_Validate(json jInstance, json joSchema)
                     break;
             }
 
-            //schema_debug_Json("Post Array Loop :: jResult", jResult);
-            //schema_debug_Value("Post Array Loop :: nResultLength", IntToString(nResultLength));
-            //schema_debug_Value("Post Array Loop :: i", IntToString(i));
-
             int j; for (; j < nResultLength; j++)
             {
-                json joRes = JsonArrayGet(jResult, j);
+                json joResult = JsonArrayGet(jResult, j);
                 if (i == nResultLength)
-                    schema_output_InsertAnnotation(joOutputUnit, joRes);
+                    schema_output_InsertAnnotation(joOutputUnit, joResult);
                 else
-                    schema_output_InsertError(joOutputUnit, joRes);
-
+                    schema_output_InsertError(joOutputUnit, joResult);
                 if (i == nResultLength && schema_keyword_IsModern())
                 {
-                    jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joRes));
-                    jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(joRes));
+                    jaEvaluatedProperties = schema_scope_MergeArrays(jaEvaluatedProperties, schema_output_GetEvaluatedProperties(joResult));
+                    jaEvaluatedItems = schema_scope_MergeArrays(jaEvaluatedItems, schema_output_GetEvaluatedItems(joResult));
                 }
             }
             
-            if (SOURCE)
-            {
-                string sSource = __FUNCTION__ + " (array)";
-                JsonObjectSetInplace(joOutputUnit, "source", JsonString(sSource));
-            }   
-
+            if (SCHEMA_OUTPUT_INCLUDE_SOURCE)
+                JsonObjectSetInplace(joOutputUnit, "source", JsonString(__FUNCTION__ + " (array)"));
+ 
             /// @note Since schema_output_Insert* is not called here, the result must be
             ///     manually saved to ensure its availability to the calling functions.
             schema_output_SaveValidationResult(joOutputUnit);
@@ -4562,11 +4668,7 @@ json schema_core_Validate(json jInstance, json joSchema)
                 schema_output_InsertError(joOutputUnit, jResult, sSource);
         }
         else
-        {
             jResult = JsonObjectSet(JsonObject(), "valid", JsonBool(TRUE));
-            /// @todo
-            ///     [ ] When integrating joResult, we'll make JsonNull() mean that the keyword is not handled and/or supported?
-        }
     }
 
     if (schema_keyword_IsModern() && schema_output_GetValid(joOutputUnit))
@@ -4578,17 +4680,7 @@ json schema_core_Validate(json jInstance, json joSchema)
             schema_output_SetAnnotation(joOutputUnit, "evaluatedItems", jaEvaluatedItems);
     }
 
-    /// @todo
-    ///     [ ] process unevaluatedItems and unevaluatedProperties here
-    ///         We'll use the jInstance to grab the appropriate object keys, if they exist
-    ///         the fucntion needs full access to jResult to pull the appropraite evaluated
-    ///         keys from the result set.
-    ///     [ ] This should return a set ready to go straight into the output.
-    ///     [ ] check keyword map
     schema_validate_Unevaluated(jInstance, joSchema, joOutputUnit);
-
-    // if (bDynamicAnchor)
-    //    schema_scope_PopDynamic();
 
     while (nLexicalScopes > 0)
     {
@@ -4612,11 +4704,60 @@ json schema_core_Validate(json jInstance, json joSchema)
 ///                                     PUBLIC API
 /// -----------------------------------------------------------------------------------------------
 
-int ValidateSchema(json joSchema);
-int ValidateInstance(json jInstance, string sID = "");
+int ValidateSchema(json joSchema)
+{
+    string sSchema = JsonGetString(JsonObjectGet(joSchema, "$schema"));
+    if (sSchema == "")
+        sSchema = SCHEMA_DEFAULT_DRAFT;
+
+    json joMetaSchema = schema_reference_GetSchema(sSchema);
+    if (JsonGetType(joMetaSchema) == JSON_TYPE_OBJECT)
+    {
+        schema_scope_Destroy();
+        json joResult = schema_core_Validate(joSchema, joMetaSchema);
+
+        if (schema_output_GetValid(joResult))
+        {
+            schema_reference_SaveSchema(joSchema);
+            return TRUE;
+        }
+        else
+            return FALSE;
+    }
+    else
+        return FALSE;
+}
+
+int ValidateInstance(json jInstance, string sSchema)
+{
+    if (sSchema == "")
+    {
+        Error("[SCHEMA::" + __FUNCTION__ + "] sSchema not specified; validation failed");
+        return FALSE;
+    }
+
+    json joSchema = schema_reference_GetSchema(sSchema);
+    if (JsonGetType(joSchema) == JSON_TYPE_OBJECT)
+    {
+        schema_scope_Destroy();
+        json joResult = schema_core_Validate(jInstance, joSchema);
+        return schema_output_GetValid(joResult);
+    }
+    else
+    {
+        Error("[SCHEMA::" + __FUNCTION__ + "] sSchema (" + sSchema + ") not found; validation failed");
+        return FALSE;
+    }
+}
 
 int ValidateInstanceAdHoc(json jInstance, json joSchema)
 {
+    if (JsonGetType(joSchema) != JSON_TYPE_OBJECT)
+    {
+        Error("[SCHEMA::" + __FUNCTION__ + "] joSchema is not a valid schema object; validation failed");
+        return FALSE;
+    }
+
     schema_scope_Destroy();
     json joResult = schema_core_Validate(jInstance, joSchema);
     return schema_output_GetValid(joResult);

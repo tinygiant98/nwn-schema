@@ -1,224 +1,48 @@
-/// ----------------------------------------------------------------------------
-/// @file   util_t_argstack.nss
-/// @author Ed Burke (tinygiant98) <af.hog.pilot@gmail.com>
-/// @brief  Functions for unit-testing argument stacks.
-/// ----------------------------------------------------------------------------
 
-#include "util_i_unittest"
-#include "schema_i_core"
+/// @brief This default metaschema draft will be used anytime a user provide a custom
+///     schema to be validated and has not provided a valid $schema key (either the
+///     key was not included or doesn't exist within the schema database).
+const string SCHEMA_DEFAULT_DRAFT = "https://json-schema.org/draft/2020-12/schema";
 
-#include "util_i_debug"
+/// @note The schema validation system uses database tables to save and quickly access
+///     informatin about previously used schema. The following three functions determine
+///     where schema data is persistently stored.
+/// @warning Once this system has been used and schema data loaded, changing the return
+///     values of these functions may cause data loss.
 
-// @TESTSUITE[Schema Core]
-// @TESTGROUP[Schema Validation]
-
-void schema_suite_RunTest(json joTest, json joSchema)
+/// @brief The return value of this function determines which database file schema data will
+///     be persistently saved to.
+string schema_GetDatabaseName()
 {
-    json jsDescription = JsonObjectGet(joTest, "description");
-    json jInstance = JsonObjectGet(joTest, "data");
-    json jbValid = JsonObjectGet(joTest, "valid");
-    
-    schema_debug_Value("[RunTest] jInstance = ", JsonDump(jInstance));
-    schema_debug_Json("[RunTest] jInstance", jInstance);
-
-    schema_debug_Value("[RunTest] joSchema = ", JsonDump(joSchema));
-    schema_debug_Json("[RunTest] joSchema", joSchema);
-
-    int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
-
-    if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
-    {
-        DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
-        Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
-    }
+    return "schema_system";
 }
 
-void schema_suite_TestNonAscii()
+/// @brief The return value of this function determines which database table the schema-
+///     specific data will be saved to.  This table will hold all schema data, identifiers,
+///     and keymaps.
+string schema_GetSchemaTableName()
 {
-    DescribeTestGroup("Non-ASCII Character Support");
-
-    {
-        string s = r"
-SELECT json(CAST(CAST(:obj AS BLOB) AS TEXT));
-        ";
-        sqlquery q = SqlPrepareQueryObject(GetModule(), s);
-        string j = r"
-            {
-                ""Name"": {
-                    ""type"": ""cexostring"",
-                    ""value"": ""OnSpellCastAt[°š]""
-                },
-                ""Type"": {
-                    ""type"": ""dword"",
-                    ""value"": 3
-                },
-                ""Value"": {
-                    ""type"": ""cexostring"",
-                    ""value"": ""cre_lootableress""
-                }
-            }
-        ";
-        SqlBindString(q, ":obj", j);
-
-        if (SqlStep(q))
-        {
-            json s = SqlGetJson(q, 0);
-            Debug(JsonDump(s));
-        }
-
-    }
-
-    return;
-
-    // Test 1: Enum
-    {
-        json jSchema = JsonParse(r"
-            {
-                ""Name"": {
-                    ""type"": ""cexostring"",
-                    ""value"": ""OnSpellCastAt[°š]""
-                },
-                ""Type"": {
-                    ""type"": ""dword"",
-                    ""value"": 3
-                },
-                ""Value"": {
-                    ""type"": ""cexostring"",
-                    ""value"": ""cre_lootableress""
-                }
-            }
-        ");
-        json jInstance = JsonString("°š");
-        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
-        Assert("Enum with non-ASCII character", bValid == TRUE);
-    }
-
-    // Test 2: Required
-    {
-        json jSchema = JsonParse(r"
-            {
-                ""required"": [""°š""]
-            }
-        ");
-        json jInstance = JsonParse(r"{ ""°š"": 1 }");
-        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
-        Assert("Required property with non-ASCII character", bValid == TRUE);
-    }
-
-    // Test 3: Properties
-    {
-        json jSchema = JsonParse(r"
-            {
-                ""properties"": {
-                    ""°š"": { ""type"": ""string"" }
-                }
-            }
-        ");
-        json jInstance = JsonParse(r"{ ""°š"": ""foo"" }");
-        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
-        Assert("Properties with non-ASCII key", bValid == TRUE);
-    }
-
-    // Test 4: DependentRequired
-    {
-        json jSchema = JsonParse(r"
-            {
-                ""dependentRequired"": {
-                    ""foo"": [""°š""]
-                }
-            }
-        ");
-        json jInstance = JsonParse(r"{ ""foo"": 1, ""°š"": 2 }");
-        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
-        Assert("DependentRequired with non-ASCII dependency", bValid == TRUE);
-    }
-    
-    // Test 5: PatternProperties (re-verifying)
-    {
-        json jSchema = JsonParse(r"
-            {
-                ""patternProperties"": {
-                    ""^°š"": { ""type"": ""string"" }
-                }
-            }
-        ");
-        json jInstance = JsonParse(r"{ ""°š"": ""foo"" }");
-        int bValid = ValidateInstanceAdHoc(jInstance, jSchema);
-        Assert("PatternProperties with non-ASCII regex", bValid == TRUE);
-    }
+    return "schema_schema";
 }
 
-void schema_suite_RunTestGroup(json joGroup)
+/// @brief The return value of this function determines which database table the output-
+///     specific data will be saved to.  This table holds resolved skeletons of various
+///     output nodes for quick retrieval during the validation process.
+/// @warning This table is not normally accessed by any systems outside the validation
+///     system and should not be modified.
+string schema_GetOutputTableName()
 {
-            json joSchema = JsonObjectGet(joGroup, "schema");
-            json jaTests = JsonObjectGet(joGroup, "tests");
-            DescribeTestGroup(JsonGetString(JsonObjectGet(joGroup, "description")));
-            
-            int j; for (; j < JsonGetLength(jaTests); j++)
-            {
-                json joTest = JsonArrayGet(jaTests, j);
-                json jsDescription = JsonObjectGet(joTest, "description");
-                json jInstance = JsonObjectGet(joTest, "data");
-                json jbValid = JsonObjectGet(joTest, "valid");
-                
-                int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
-
-                if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
-                {
-                    DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
-                    //Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
-                }
-                Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
-            } Outdent();
-}
-
-void schema_suite_RunTestSuiteFromFile()
-{
-    json jaSuite = JsonParse(ResManGetFileContents("test", RESTYPE_TXT));
-    int i; for (; i < JsonGetLength(jaSuite); i++)
-    {
-        json joGroup = JsonArrayGet(jaSuite, i);
-        {
-            DelayCommand(0.0, schema_suite_RunTestGroup(joGroup));
-//            json joSchema = JsonObjectGet(joGroup, "schema");
-//            json jaTests = JsonObjectGet(joGroup, "tests");
-//            DescribeTestGroup(JsonGetString(JsonObjectGet(joGroup, "description")));
-//            
-//            int j; for (; j < JsonGetLength(jaTests); j++)
-//            {
-//                json joTest = JsonArrayGet(jaTests, j);
-//                DelayCommand(0f, schema_suite_RunIndividualTest(joTest, joSchema));
-//
-//                json jsDescription = JsonObjectGet(joTest, "description");
-//                json jInstance = JsonObjectGet(joTest, "data");
-//                json jbValid = JsonObjectGet(joTest, "valid");
-//                
-//                schema_debug_Value("[RunTest] jInstance = ", JsonDump(jInstance));
-//                schema_debug_Json("[RunTest] jInstance", jInstance);
-//
-//                schema_debug_Value("[RunTest] joSchema = ", JsonDump(joSchema));
-//                schema_debug_Json("[RunTest] joSchema", joSchema);
-//
-//                int bValid = ValidateInstanceAdHoc(jInstance, joSchema);
-//
-//                if (!Assert(JsonGetString(jsDescription), bValid == JsonGetInt(jbValid)))
-//                {
-//                    DescribeTestParameters(JsonDump(joTest), JsonDump(jbValid), JsonDump(JsonBool(bValid)));
-//                    Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
-//                }
-//                //Debug(HexColorString(JsonDump(schema_output_GetValidationResult(), 4), COLOR_BLUE_LIGHT));
-//            } Outdent();
-        }
-    }
+    return "schema_output";
 }
 
 /// @note This function contains all valid json-schema.org provided schema.  If a new version is released, simply
-///     add the associated schema and vocabularies here.  The newest primary metaschema should be listed first
-///     as it will be become the default when a user does not provide the metaschema.
+///     add the associated schema and vocabularies here.  Trusted metaschema are loaded in reverse chronological
+///     order to ensure all available vocabulary-defined schema are available during the loading process to define
+///     keyword maps, so if a new metaschema is published, add it after the next most-recent metaschema.
 /// @note This implementation has some limitations.  For example, you'll need to replace all single-double quotes
 ///     with double-double quotes.  This can be done with a simple regex search and replace within vscode:
-///         Search: (".*?")
-///         Replace: ""$1""
+///         Search: "(.*?)"
+///         Replace: "$1"
 ///     Additionally, escaped strings, for some reason, do not sit well with raw strings.  So those also need
 ///     to be removed with the same process:
 ///         Search: \\"(.*?)\\"
@@ -226,7 +50,6 @@ void schema_suite_RunTestSuiteFromFile()
 /// @note This methodology was selected as a consistent method to initially populate schema tables with json-schema.org
 ///     metaschema without including additional files.  Official drafts are not expected to change, so this
 ///     function should only require updating when a new official meta schema is released by json-schema.org.
-/// @todo This probably belongs in util_c_schema once everything is packaged up. 
 json schema_core_GetTrustedSchema(int bLoadTestSuiteFiles = FALSE)
 {
     json jaTrustedSchema = JsonArray();
@@ -1531,41 +1354,4 @@ json schema_core_GetTrustedSchema(int bLoadTestSuiteFiles = FALSE)
     }
 
     return jaTrustedSchema;
-}
-
-void main()
-{
-    Debug("Running " + __FILE__);
-
-    if (GetLocalInt(GetModule(), "LOAD_SCHEMA"))
-    {
-        Debug("bLoad = TRUE");
-
-        schema_core_CreateTables();
-
-        json jaTrustedSchema = schema_core_GetTrustedSchema(TRUE);
-        int i; for (i = 0; i < JsonGetLength(jaTrustedSchema); i++)
-        {
-            json joSchema = JsonArrayGet(jaTrustedSchema, i);
-            json jID = JsonObjectGet(joSchema, "$id");
-            if (JsonGetType(jID) == JSON_TYPE_NULL)
-                jID = JsonObjectGet(joSchema, "id");
-
-            Debug("Adding schema for " + JsonGetString(jID));
-            schema_reference_SaveSchema(joSchema);
-        }
-
-        schema_reference_RebuildKeymaps();
-
-    }
-    else if (GetLocalInt(GetModule(), "TEST_ASCII"))
-    {
-        schema_suite_TestNonAscii();
-    }
-    else
-    {
-        Debug("bLoad == FALSE");
-        DescribeTestSuite("Schema Core Unit Tests");
-        schema_suite_RunTestSuiteFromFile();
-    }
 }
